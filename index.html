@@ -2859,6 +2859,10 @@
             const [searchQuery, setSearchQuery] = useState('');
             const [filterFamiliarity, setFilterFamiliarity] = useState('all');
             const [selectedLetter, setSelectedLetter] = useState('ALL');
+            // SORT: 'default' keeps original list order. Name sorts alphabetically;
+            // date uses each word's id, which is timestamp-based, so it doubles as
+            // "date added" without needing a separate stored field.
+            const [sortBy, setSortBy] = useState('name-asc');
 
             // MEMORIZATION CHUNKS SYSTEM (25 words per chunk)
             const [selectedChunk, setSelectedChunk] = useState('ALL');
@@ -3918,10 +3922,25 @@ Rules:
 
                 if (isShuffled) {
                     list = [...list].sort(() => 0.5 - Math.random());
+                } else if (sortBy !== 'default') {
+                    list = [...list].sort((a, b) => {
+                        switch (sortBy) {
+                            case 'name-asc':
+                                return (a?.word || '').localeCompare(b?.word || '');
+                            case 'name-desc':
+                                return (b?.word || '').localeCompare(a?.word || '');
+                            case 'date-newest':
+                                return (b?.id || 0) - (a?.id || 0);
+                            case 'date-oldest':
+                                return (a?.id || 0) - (b?.id || 0);
+                            default:
+                                return 0;
+                        }
+                    });
                 }
 
                 return list;
-            }, [currentWords, selectedChunk, searchQuery, filterFamiliarity, selectedLetter, currentFamiliarityMap, showBangla, isShuffled, shuffleSeed]);
+            }, [currentWords, selectedChunk, searchQuery, filterFamiliarity, selectedLetter, currentFamiliarityMap, showBangla, isShuffled, shuffleSeed, sortBy]);
 
             // Playable pool: same as filteredWords, but with each word's synonyms/antonyms
             // flattened in as their own standalone playable items (so they can show up in
@@ -5324,6 +5343,21 @@ Rules:
                                         <option value="unfamiliar">○ Unfamiliar ({familiarityCounts.unfamiliar})</option>
                                         <option value="semi">◐ Semi-familiar ({familiarityCounts.semi})</option>
                                         <option value="familiar">⬤ Familiar ({familiarityCounts.familiar})</option>
+                                    </select>
+                                </label>
+                                <label className="flex items-center gap-2 font-bold text-xs text-slate-500 whitespace-nowrap">
+                                    <span>↕ SORT:</span>
+                                    <select
+                                        value={sortBy}
+                                        onChange={(e) => setSortBy(e.target.value)}
+                                        className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        title="Sort the word list"
+                                    >
+                                        <option value="default">Default order</option>
+                                        <option value="name-asc">Name (A → Z)</option>
+                                        <option value="name-desc">Name (Z → A)</option>
+                                        <option value="date-newest">Date added (Newest)</option>
+                                        <option value="date-oldest">Date added (Oldest)</option>
                                     </select>
                                 </label>
                             </div>
