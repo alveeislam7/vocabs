@@ -2639,6 +2639,55 @@
                 };
             });
 
+            // AUTO-FETCH PUBLISHED DEFAULT DATA (words-data.json)
+            // First-time visitors — anyone whose browser has NO saved
+            // Vocabulation data yet — automatically pull whichever books/words
+            // you've published to `words-data.json` in this same repo, right
+            // next to index.html. That way, anyone opening your GitHub Pages
+            // link sees your latest words without importing anything.
+            //
+            // Returning visitors (this browser already has saved data/progress,
+            // including this device) are left completely untouched — this only
+            // ever fires once, before anything is ever written to localStorage.
+            //
+            // TO PUBLISH NEW WORDS/PAGES: in the app, go to Data Management and
+            // click "💾 Export Backup". Rename the downloaded file to exactly
+            // words-data.json, then upload/replace it in your GitHub repo next
+            // to index.html and commit. No further code changes ever needed —
+            // just repeat this whenever you add more words or pages.
+            useEffect(() => {
+                const hasLocalData = localStorage.getItem('wordsmart_all_words_map')
+                    || localStorage.getItem('wordsmart_custom_books_list')
+                    || localStorage.getItem('wordsmart_data_ws1')
+                    || localStorage.getItem('wordsmart_data_ws2');
+                if (hasLocalData) return;
+
+                fetch('words-data.json', { cache: 'no-store' })
+                    .then(res => (res.ok ? res.json() : null))
+                    .then(payload => {
+                        if (!payload || typeof payload !== 'object') return;
+                        const importedBooks = Array.isArray(payload.books) ? payload.books : null;
+                        const importedWords = payload.allWords && typeof payload.allWords === 'object' ? payload.allWords : null;
+                        if (!importedBooks || !importedWords) return;
+
+                        setBooks(importedBooks);
+                        setAllWords(importedWords);
+                        if (payload.allFamiliarity && typeof payload.allFamiliarity === 'object') {
+                            setAllFamiliarity(payload.allFamiliarity);
+                        }
+                        if (payload.allTrash && typeof payload.allTrash === 'object') {
+                            setAllTrash(payload.allTrash);
+                        }
+                        const fallbackBookId = importedBooks.find(b => b?.id)?.id;
+                        if (fallbackBookId) setSelectedBookId(fallbackBookId);
+                    })
+                    .catch(() => {
+                        // No words-data.json published yet (or this is a local
+                        // file:// open where fetch can't work) — silently keep
+                        // the built-in defaults already loaded above.
+                    });
+            }, []);
+
             // BANGLA TOGGLE SWITCH
             const [showBangla, setShowBangla] = useState(() => {
                 const saved = localStorage.getItem('wordsmart_show_bangla');
