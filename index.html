@@ -23,7 +23,7 @@
             getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
         } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
         import {
-            getFirestore, doc, getDoc, setDoc
+            getFirestore, doc, getDoc, setDoc, collection, getDocs, writeBatch
         } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -40,7 +40,7 @@
         const provider = new GoogleAuthProvider();
         const db = getFirestore(fbApp);
 
-        window.FB = { auth, provider, db, signInWithPopup, signOut, onAuthStateChanged, doc, getDoc, setDoc };
+        window.FB = { auth, provider, db, signInWithPopup, signOut, onAuthStateChanged, doc, getDoc, setDoc, collection, getDocs, writeBatch };
         window.dispatchEvent(new Event('fb-ready'));
     </script>
     <!-- FontAwesome Icons -->
@@ -1506,6 +1506,53 @@
                 </div>
             </div>
             );
+        };
+
+        // Firestore caps a single document at 1 MiB. A word (with its synonyms/
+        // antonyms) runs ~2KB, so a book with 800+ words can already blow past that
+        // on its own. To stay safely under the cap at any book size, each book's
+        // words are split into fixed-size chunks and each chunk is stored as its
+        // own small document, instead of one giant document holding everything.
+        const CLOUD_WORDS_CHUNK_SIZE = 150;
+
+        // allWords ({bookId: [word, word, ...]}) -> flat list of the chunk documents
+        // that should exist in Firestore to represent it right now.
+        const splitWordsIntoCloudChunks = (allWords) => {
+            const chunks = [];
+            Object.keys(allWords || {}).forEach((bookId) => {
+                const words = allWords[bookId] || [];
+                for (let i = 0; i < words.length; i += CLOUD_WORDS_CHUNK_SIZE) {
+                    const chunkIndex = i / CLOUD_WORDS_CHUNK_SIZE;
+                    chunks.push({
+                        docId: `${bookId}__${chunkIndex}`,
+                        bookId,
+                        chunkIndex,
+                        words: words.slice(i, i + CLOUD_WORDS_CHUNK_SIZE),
+                    });
+                }
+            });
+            return chunks;
+        };
+
+        // Reverse of the above: Firestore chunk-doc snapshots -> allWords shape.
+        const assembleAllWordsFromCloudChunks = (chunkDocsSnapshot) => {
+            const byBook = {};
+            const idSet = new Set();
+            chunkDocsSnapshot.forEach((chunkDoc) => {
+                idSet.add(chunkDoc.id);
+                const data = chunkDoc.data() || {};
+                const bookId = data.bookId;
+                if (!bookId) return;
+                if (!byBook[bookId]) byBook[bookId] = [];
+                byBook[bookId].push({ chunkIndex: data.chunkIndex || 0, words: Array.isArray(data.words) ? data.words : [] });
+            });
+            const allWords = {};
+            Object.keys(byBook).forEach((bookId) => {
+                allWords[bookId] = byBook[bookId]
+                    .sort((a, b) => a.chunkIndex - b.chunkIndex)
+                    .flatMap((c) => c.words);
+            });
+            return { allWords, idSet };
         };
 
         const migrateMasteredToFamiliarity = (allMastered) => {
@@ -3672,6 +3719,10 @@ Rules:
             // then, so a slow network can't let a stale local snapshot race ahead
             // of the real cloud data and overwrite it.
             const cloudPulledRef = useRef(false);
+            // The set of Firestore "bookWords" chunk-document IDs that currently exist
+            // for this user, as of the last load or save — used so a save that shrinks
+            // a book (fewer chunks needed) knows which now-stale chunk docs to delete.
+            const cloudChunkIdsRef = useRef(new Set());
 
             // Wait for the Firebase bootstrap <script type="module"> (in <head>) to
             // finish, then start listening for sign-in/out state changes.
@@ -3719,31 +3770,41 @@ Rules:
             // browser as the starting point for their account.
             useEffect(() => {
                 if (!cloudAuthReady || !cloudUser || !window.FB) return;
-                const { db, doc, getDoc, setDoc } = window.FB;
-                const ref = doc(db, 'users', cloudUser.uid);
+                const { db, doc, getDoc, collection, getDocs, writeBatch } = window.FB;
+                const metaRef = doc(db, 'users', cloudUser.uid);
                 setCloudSyncStatus('loading');
-                getDoc(ref).then((snap) => {
+                getDoc(metaRef).then((snap) => {
                     if (snap.exists()) {
                         const cloud = snap.data() || {};
-                        applyingCloudDataRef.current = true;
-                        if (Array.isArray(cloud.books)) setBooks(cloud.books);
-                        if (cloud.allWords && typeof cloud.allWords === 'object') setAllWords(cloud.allWords);
-                        if (cloud.allFamiliarity && typeof cloud.allFamiliarity === 'object') setAllFamiliarity(cloud.allFamiliarity);
-                        if (cloud.allTrash && typeof cloud.allTrash === 'object') setAllTrash(cloud.allTrash);
-                        if (typeof cloud.userXP === 'number') setUserXP(cloud.userXP);
-                        setTimeout(() => { applyingCloudDataRef.current = false; }, 0);
-                        cloudPulledRef.current = true;
-                        setCloudSyncStatus('saved');
-                        triggerToast(`Welcome back${cloudUser.displayName ? ', ' + cloudUser.displayName.split(' ')[0] : ''}! Your cloud data is loaded.`);
+                        return getDocs(collection(db, 'users', cloudUser.uid, 'bookWords')).then((chunkSnaps) => {
+                            const { allWords, idSet } = assembleAllWordsFromCloudChunks(chunkSnaps);
+                            applyingCloudDataRef.current = true;
+                            if (Array.isArray(cloud.books)) setBooks(cloud.books);
+                            setAllWords(allWords);
+                            if (cloud.allFamiliarity && typeof cloud.allFamiliarity === 'object') setAllFamiliarity(cloud.allFamiliarity);
+                            if (cloud.allTrash && typeof cloud.allTrash === 'object') setAllTrash(cloud.allTrash);
+                            if (typeof cloud.userXP === 'number') setUserXP(cloud.userXP);
+                            cloudChunkIdsRef.current = idSet;
+                            setTimeout(() => { applyingCloudDataRef.current = false; }, 0);
+                            cloudPulledRef.current = true;
+                            setCloudSyncStatus('saved');
+                            triggerToast(`Welcome back${cloudUser.displayName ? ', ' + cloudUser.displayName.split(' ')[0] : ''}! Your cloud data is loaded.`);
+                        });
                     } else {
-                        setDoc(ref, { books, allWords, allFamiliarity, allTrash, userXP, updatedAt: Date.now() }).then(() => {
+                        // First-ever sign-in: publish this browser's current data (split
+                        // into per-book word chunks) as the starting point for the account.
+                        const desiredChunks = splitWordsIntoCloudChunks(allWords);
+                        const desiredIds = new Set(desiredChunks.map((c) => c.docId));
+                        const batch = writeBatch(db);
+                        batch.set(metaRef, { books, allFamiliarity, allTrash, userXP, updatedAt: Date.now() });
+                        desiredChunks.forEach((c) => {
+                            batch.set(doc(db, 'users', cloudUser.uid, 'bookWords', c.docId), { bookId: c.bookId, chunkIndex: c.chunkIndex, words: c.words });
+                        });
+                        return batch.commit().then(() => {
+                            cloudChunkIdsRef.current = desiredIds;
                             cloudPulledRef.current = true;
                             setCloudSyncStatus('saved');
                             triggerToast("Account created — this browser's data is now backed up to your account.");
-                        }).catch((err) => {
-                            console.error(err);
-                            setCloudSyncStatus('error');
-                            triggerToast('Could not set up your cloud account — check your connection.');
                         });
                     }
                 }).catch((err) => {
@@ -3763,13 +3824,30 @@ Rules:
                 if (!cloudUser || !window.FB) return;
                 if (!cloudPulledRef.current) return;      // initial load/create hasn't finished yet — don't race it
                 if (applyingCloudDataRef.current) return; // this change just came FROM the cloud — don't bounce it back up
-                const { db, doc, setDoc } = window.FB;
+                const { db, doc, collection, writeBatch } = window.FB;
                 setCloudSyncStatus('saving');
                 const handle = setTimeout(() => {
-                    const ref = doc(db, 'users', cloudUser.uid);
-                    setDoc(ref, { books, allWords, allFamiliarity, allTrash, userXP, updatedAt: Date.now() })
-                        .then(() => setCloudSyncStatus('saved'))
-                        .catch((err) => { console.error(err); setCloudSyncStatus('error'); });
+                    const metaRef = doc(db, 'users', cloudUser.uid);
+                    const desiredChunks = splitWordsIntoCloudChunks(allWords);
+                    const desiredIds = new Set(desiredChunks.map((c) => c.docId));
+                    // Any chunk doc that existed before but isn't needed anymore (a book
+                    // got shorter, or was deleted) has to be explicitly deleted — Firestore
+                    // doesn't do this for you just because you stopped writing to it.
+                    const staleIds = Array.from(cloudChunkIdsRef.current).filter((id) => !desiredIds.has(id));
+
+                    const batch = writeBatch(db);
+                    batch.set(metaRef, { books, allFamiliarity, allTrash, userXP, updatedAt: Date.now() });
+                    desiredChunks.forEach((c) => {
+                        batch.set(doc(db, 'users', cloudUser.uid, 'bookWords', c.docId), { bookId: c.bookId, chunkIndex: c.chunkIndex, words: c.words });
+                    });
+                    staleIds.forEach((id) => {
+                        batch.delete(doc(db, 'users', cloudUser.uid, 'bookWords', id));
+                    });
+
+                    batch.commit().then(() => {
+                        cloudChunkIdsRef.current = desiredIds;
+                        setCloudSyncStatus('saved');
+                    }).catch((err) => { console.error(err); setCloudSyncStatus('error'); });
                 }, 1500);
                 return () => clearTimeout(handle);
             }, [books, allWords, allFamiliarity, allTrash, userXP, cloudUser]);
