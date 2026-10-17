@@ -1701,7 +1701,7 @@
             };
         })();
 
-        function ModernVocabGame({ userXP = 0, userLevel = 1, wordPool, showBangla, triggerToast, onVictoryXP, appTheme, onThemeChange, shortcuts, globalSound, speechAccent = 'us', fieldVisibility = DEFAULT_FIELD_VISIBILITY, familiarityMap = null, onSetFamiliarity = null }) {
+        function ModernVocabGame({ userXP = 0, userLevel = 1, wordPool, showBangla, triggerToast, onVictoryXP, appTheme, onThemeChange, shortcuts, globalSound, speechAccent = 'us', fieldVisibility = DEFAULT_FIELD_VISIBILITY, familiarityMap = null, onSetFamiliarity = null, onGameFinished = null, onReviewMissed = null, reviewActive = false, reviewCount = 0, onExitReview = null, mistakeBankCount = 0, onOpenMistakeBank = null }) {
             const [gameMode, setGameMode] = useState('menu'); // 'menu','classic','speed','match','fillin','truefalse','synant'
             const [gameState, setGameState] = useState('idle'); // 'idle','playing','summary','paused'
             const [score, setScore] = useState(0);
@@ -1740,6 +1740,21 @@
             // Question navigation history (all game modes)
             const [nav, setNav] = useState({ list: [], idx: -1 });
             const [slideDir, setSlideDir] = useState('next');
+
+            // Report the finished round up to the App once, when we land on the
+            // summary screen — records missed words into the cross-session
+            // mistake bank and logs the attempt into game history.
+            const reportedRef = useRef(false);
+            useEffect(() => {
+                if (gameState === 'summary') {
+                    if (!reportedRef.current && onGameFinished) {
+                        reportedRef.current = true;
+                        onGameFinished({ mode: gameMode, score, questionsAnswered, missedWords, maxCombo, isReview: reviewActive });
+                    }
+                } else {
+                    reportedRef.current = false;
+                }
+            }, [gameState]);
 
             // Word Match
             const [matchWords, setMatchWords] = useState([]);
@@ -2374,14 +2389,25 @@
                     {!isImmersive && (
                         <div className="flex items-center justify-between flex-wrap gap-3">
                             <h2 className={`text-xl font-black flex items-center gap-2 ${appTheme === 'light' ? 'text-slate-800' : 'text-white'}`}>🎮 Word Quest</h2>
-                            {/* Player level lives here now (moved out of the main top bar) */}
-                            <div className="flex items-center gap-2 bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-400/40 rounded-xl px-3 py-1.5" title={`${userXP} total XP earned`}>
-                                <span className="text-lg">🏆</span>
-                                <div className="leading-tight">
-                                    <div className={`text-[11px] font-black ${appTheme === 'light' ? 'text-amber-700' : 'text-amber-300'}`}>LEVEL {userLevel} LEARNER</div>
-                                    <div className={`text-[10px] ${appTheme === 'light' ? 'text-slate-500' : 'text-amber-100/80'}`}>{userXP % 100}/100 XP · {userXP} total</div>
+                            {/* Compact level badge: a ring showing progress to the next level,
+                                with the level number inside — replaces the old oversized
+                                "LEVEL X LEARNER" text box. */}
+                            <div
+                                className={`flex items-center gap-2 rounded-full pl-1.5 pr-3 py-1 border ${appTheme === 'light' ? 'bg-white border-slate-200 shadow-sm' : 'bg-white/5 border-white/15'}`}
+                                title={`${userXP} total XP earned`}
+                            >
+                                <div
+                                    className="relative w-8 h-8 rounded-full shrink-0"
+                                    style={{ background: `conic-gradient(#f59e0b ${userXP % 100}%, ${appTheme === 'light' ? '#e2e8f0' : 'rgba(255,255,255,0.15)'} 0)` }}
+                                >
+                                    <div className={`absolute inset-[2.5px] rounded-full flex items-center justify-center text-[11px] font-black ${appTheme === 'light' ? 'bg-white text-amber-600' : 'bg-slate-900 text-amber-300'}`}>
+                                        {userLevel}
+                                    </div>
                                 </div>
-                                <div className="w-16 h-1.5 rounded-full bg-slate-400/30 overflow-hidden"><div className="h-full bg-amber-400" style={{ width: `${userXP % 100}%` }} /></div>
+                                <div className="leading-tight">
+                                    <div className={`text-[10px] font-extrabold uppercase tracking-wider ${appTheme === 'light' ? 'text-slate-500' : 'text-white/60'}`}>Level {userLevel}</div>
+                                    <div className={`text-[10px] ${appTheme === 'light' ? 'text-slate-400' : 'text-white/40'}`}>{userXP % 100}/100 XP</div>
+                                </div>
                             </div>
                             <FocusControls />
                         </div>
@@ -2389,6 +2415,32 @@
                     {isImmersive && (
                         <h2 className="text-2xl font-black text-center mb-2">🎮 Choose a challenge</h2>
                     )}
+
+                    {!isImmersive && (
+                        reviewActive ? (
+                            <div className="flex items-center justify-between gap-3 bg-rose-50 border border-rose-200 rounded-xl px-4 py-2.5 flex-wrap">
+                                <span className="text-xs font-bold text-rose-700">📝 Review mode — pick any mode below to retry your {reviewCount} missed word{reviewCount === 1 ? '' : 's'}</span>
+                                <button onClick={onExitReview} className="text-[11px] font-bold text-rose-500 hover:text-rose-700 underline">Exit Review</button>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <button
+                                    onClick={() => onOpenMistakeBank && onOpenMistakeBank('mistakes')}
+                                    disabled={mistakeBankCount === 0}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${appTheme === 'light' ? 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100' : 'bg-rose-500/10 text-rose-300 border-rose-500/30 hover:bg-rose-500/20'}`}
+                                >
+                                    📉 Mistakes ({mistakeBankCount})
+                                </button>
+                                <button
+                                    onClick={() => onOpenMistakeBank && onOpenMistakeBank('history')}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${appTheme === 'light' ? 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100' : 'bg-white/5 text-white/70 border-white/15 hover:bg-white/10'}`}
+                                >
+                                    📜 History
+                                </button>
+                            </div>
+                        )
+                    )}
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                         {[
                             { mode:'classic', icon:'⚔️', title:'Classic Battle', desc:'Answer 10 questions with 5 lives. Combo for bonus XP!', color:'from-indigo-500 to-blue-700' },
@@ -2439,6 +2491,14 @@
                         <button onClick={()=>startGame(gameMode)} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-xl shadow transition-all">🔄 Play Again</button>
                         <button onClick={()=>{setGameState('idle');setGameMode('menu');}} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl border border-slate-200 transition-all">🏠 Main Menu</button>
                     </div>
+                    {missedWords.length > 0 && onReviewMissed && (
+                        <button
+                            onClick={() => { onReviewMissed(missedWords); setGameState('idle'); setGameMode('menu'); }}
+                            className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl transition-all text-sm"
+                        >
+                            📝 Retry These {missedWords.length} Missed Word{missedWords.length === 1 ? '' : 's'}
+                        </button>
+                    )}
                 </FocusShell>
             );
 
@@ -3033,6 +3093,71 @@
                 localStorage.setItem('wordsmart_activity_log', JSON.stringify(activityLog));
             }, [activityLog]);
             const todayKey = () => localDateKey();
+
+            // ============================================================
+            // MISTAKE TRACKING + HISTORY — shared pattern for Practice Quiz
+            // and Word Quest. Mistakes are keyed by word id (ids are globally
+            // unique) with a running miss-count; history is a capped log of
+            // past attempts so "what quiz did I do and when" is answerable.
+            // ============================================================
+            const [quizMistakes, setQuizMistakes] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('wordsmart_quiz_mistakes') || '{}'); } catch (e) { return {}; }
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_quiz_mistakes', JSON.stringify(quizMistakes)); } catch (e) {} }, [quizMistakes]);
+            const [quizHistory, setQuizHistory] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('wordsmart_quiz_history') || '[]'); } catch (e) { return []; }
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_quiz_history', JSON.stringify(quizHistory)); } catch (e) {} }, [quizHistory]);
+
+            const [gameMistakes, setGameMistakes] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('wordsmart_game_mistakes') || '{}'); } catch (e) { return {}; }
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_game_mistakes', JSON.stringify(gameMistakes)); } catch (e) {} }, [gameMistakes]);
+            const [gameHistory, setGameHistory] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('wordsmart_game_history') || '[]'); } catch (e) { return []; }
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_game_history', JSON.stringify(gameHistory)); } catch (e) {} }, [gameHistory]);
+
+            // Resolve a mistakes map {wordId: {count,last}} into live word objects
+            // by scanning every book's word list (a word may have moved books,
+            // been edited, or been deleted since it was missed).
+            const allWordsFlat = useMemo(() => Object.values(allWords).flat(), [allWords]);
+            const resolveMistakeWords = (mistakesMap) => {
+                const byId = new Map(allWordsFlat.map(w => [w.id, w]));
+                return Object.entries(mistakesMap)
+                    .map(([id, meta]) => {
+                        const w = byId.get(Number(id)) || byId.get(id);
+                        if (!w) return null;
+                        return { ...w, __missCount: meta.count || 1, __lastMissed: meta.last || 0 };
+                    })
+                    .filter(Boolean)
+                    .sort((a, b) => b.__lastMissed - a.__lastMissed);
+            };
+            const quizMistakeWords = useMemo(() => resolveMistakeWords(quizMistakes), [quizMistakes, allWordsFlat]);
+            const gameMistakeWords = useMemo(() => resolveMistakeWords(gameMistakes), [gameMistakes, allWordsFlat]);
+
+            const recordMistakes = (setMistakesFn, words) => {
+                if (!words || !words.length) return;
+                setMistakesFn(prev => {
+                    const next = { ...prev };
+                    words.forEach(w => {
+                        if (!w || w.id === undefined) return;
+                        const existing = next[w.id] || { count: 0 };
+                        next[w.id] = { count: existing.count + 1, last: Date.now() };
+                    });
+                    return next;
+                });
+            };
+
+            // Which specific mistake words the person picked to be re-tested on
+            // (null = use the whole mistake bank / not in review mode).
+            const [quizReviewPool, setQuizReviewPool] = useState(null);
+            const [showQuizReviewModal, setShowQuizReviewModal] = useState(false);
+            const [showGameReviewModal, setShowGameReviewModal] = useState(false);
+            const [quizReviewTab, setQuizReviewTab] = useState('mistakes'); // 'mistakes' | 'history'
+            const [gameReviewTab, setGameReviewTab] = useState('mistakes');
+            const [quizMistakeSelection, setQuizMistakeSelection] = useState(null); // null = "all selected"
+            const [gameMistakeSelection, setGameMistakeSelection] = useState(null);
             // DAILY WORD GOAL — new words marked Familiar per day (set in Word Manager)
             const MIN_DAILY_GOAL = 1, MAX_DAILY_GOAL = 100;
             const [dailyGoal, setDailyGoal] = useState(() => {
@@ -4473,6 +4598,45 @@ Rules:
                 return out;
             }, [filteredWords, fieldVisibility.synonyms, fieldVisibility.antonyms]);
 
+            // WORD QUEST — review mode pool: the mistaken words themselves, padded
+            // with a handful of unique extra words (never duplicated — Word Match
+            // samples cards directly from this array, so repeats would create
+            // duplicate tiles) so every mode has enough distinct options to build
+            // multiple-choice distractors and 6-card match rounds from.
+            const buildGameReviewPool = (words) => {
+                const uniqueIds = new Set(words.map(w => w.id));
+                const need = Math.max(0, 6 - uniqueIds.size);
+                const filler = playablePool.filter(w => !uniqueIds.has(w.id)).sort(() => 0.5 - Math.random()).slice(0, need);
+                return [...words, ...filler];
+            };
+            const [gameReviewPool, setGameReviewPoolState] = useState(null); // live word-pool array used by the game, or null
+            const [gameReviewCount, setGameReviewCount] = useState(0); // how many distinct words are being reviewed
+            const startGameReview = (words) => {
+                if (!words || !words.length) return;
+                setGameReviewPoolState(buildGameReviewPool(words));
+                setGameReviewCount(words.length);
+            };
+            const exitGameReview = () => { setGameReviewPoolState(null); setGameReviewCount(0); };
+            const gameWordPool = gameReviewPool && gameReviewPool.length ? gameReviewPool : playablePool;
+
+            const handleGameFinished = ({ mode, score, questionsAnswered, missedWords, maxCombo, isReview }) => {
+                recordMistakes(setGameMistakes, missedWords);
+                setGameHistory(prev => [
+                    {
+                        id: Date.now(),
+                        date: Date.now(),
+                        mode,
+                        score,
+                        questionsAnswered,
+                        missed: (missedWords || []).length,
+                        maxCombo,
+                        isReview: !!isReview,
+                        bookTitle: books.find(b => b.id === selectedBookId)?.title || 'Book',
+                    },
+                    ...prev,
+                ].slice(0, 50));
+            };
+
             const itemsPerPage = 30;
             const totalPages = Math.ceil(filteredWords.length / itemsPerPage);
             const startIndex = (currentPage - 1) * itemsPerPage;
@@ -4595,26 +4759,38 @@ Rules:
                 return questions;
             };
 
-            // Build questions from current settings and enter play mode
-            const buildAndStartQuiz = () => {
+            // Build questions from current settings and enter play mode.
+            // When reviewPoolOverride is given (Review Mistakes), questions are
+            // drawn ONLY from those words, but wrong-answer options still pull
+            // from the whole book, so even a single mistaken word works fine.
+            const buildAndStartQuiz = (reviewPoolOverride) => {
                 // Always respect the active Status filter (familiar/semi/unfamiliar) — previously this
                 // silently fell back to the entire unfiltered book when the filtered set was small,
                 // which made the Status filter appear broken.
-                const pool = playablePool;
-                if (pool.length < 4) {
+                const isReview = Array.isArray(reviewPoolOverride) && reviewPoolOverride.length > 0;
+                const pool = isReview ? reviewPoolOverride : playablePool;
+                const distractorSource = isReview ? currentWords : pool;
+                setQuizReviewPool(isReview ? reviewPoolOverride : null);
+                if (!isReview && pool.length < 4) {
                     const filterNote = filterFamiliarities.length > 0
                         ? ` (currently filtered to ${filterFamiliarities.join(' + ')} — try a different filter or add more words to those statuses)`
                         : '';
                     triggerToast(`Please ensure you have at least 4 words in the selected list to generate a quiz!${filterNote}`);
                     return;
                 }
-                const countNum = quizQuestionCount === 'all'
-                    ? Math.min(pool.length, 50)
-                    : Math.max(1, Math.min(Number(quizQuestionCount) || 10, 100));
-                // Pass `pool` as BOTH the question source and the wrong-answer source, so every
-                // question AND every option comes from the selected chunk (previously the wrong
-                // options were drawn from the whole book, which made other chunks leak in).
-                const questions = buildQuizQuestions(pool, pool, quizTypes, countNum);
+                if (isReview && distractorSource.length < 4) {
+                    triggerToast('Need at least 4 words in this book to generate multiple-choice options.');
+                    return;
+                }
+                const countNum = isReview
+                    ? Math.max(1, Math.min(pool.length * 2, 30))
+                    : quizQuestionCount === 'all'
+                        ? Math.min(pool.length, 50)
+                        : Math.max(1, Math.min(Number(quizQuestionCount) || 10, 100));
+                // Pass `pool` as the question source and `distractorSource` as the
+                // wrong-answer source, so every question comes from the selected
+                // chunk/review set while options still pull from the full book.
+                const questions = buildQuizQuestions(pool, distractorSource, quizTypes, countNum);
                 if (!questions.length) {
                     triggerToast("Couldn't generate that question type — try selecting more types, or add synonym/antonym data to your words first!");
                     return;
@@ -4671,6 +4847,37 @@ Rules:
                 });
             };
 
+            // Called whenever a quiz attempt ends: records which words were
+            // missed into the mistake bank, and logs the attempt into history
+            // so "what quiz did I do and when" is answerable later.
+            const finishQuiz = () => {
+                const mistaken = [];
+                let scoreNow = 0;
+                quizQuestions.forEach((q, idx) => {
+                    const a = quizAnswers[idx];
+                    if (a && a.submitted) {
+                        if (isQuizAnswerCorrect(q, a.answerId)) scoreNow++;
+                        else if (q.target) mistaken.push(q.target);
+                    }
+                });
+                recordMistakes(setQuizMistakes, mistaken);
+                setQuizHistory(prev => [
+                    {
+                        id: Date.now(),
+                        date: Date.now(),
+                        total: quizQuestions.length,
+                        score: scoreNow,
+                        types: quizTypes,
+                        isReview: !!quizReviewPool,
+                        bookTitle: books.find(b => b.id === selectedBookId)?.title || 'Book',
+                        mistakeWords: mistaken.map(w => w.word),
+                        mistakeIds: mistaken.map(w => w.id),
+                    },
+                    ...prev,
+                ].slice(0, 50));
+                setQuizPhase('done');
+            };
+
             // Reset to the setup screen whenever the quiz tab is (re)entered or the pool changes
             useEffect(() => {
                 if (activeTab === 'quiz') setQuizPhase('setup');
@@ -4718,7 +4925,7 @@ Rules:
             useEffect(() => {
                 if (quizPhase === 'playing' && quizTimerMode === 'overall' && quizOverallTimeLeft === 0) {
                     submitCurrentQuizAnswer();
-                    setQuizPhase('done');
+                    setTimeout(finishQuiz, 0);
                 }
                 // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [quizOverallTimeLeft]);
@@ -5144,6 +5351,188 @@ Rules:
                                         ⏻ Log Out
                                     </button>
                                 </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MODAL: QUIZ MISTAKE REVIEW + HISTORY */}
+                    {showQuizReviewModal && (
+                        <div
+                            className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+                            onClick={(e) => { if (e.target === e.currentTarget) setShowQuizReviewModal(false); }}
+                        >
+                            <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+                                <div className="px-6 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between shrink-0">
+                                    <h3 className="text-lg font-extrabold text-slate-900">📝 Practice Quiz</h3>
+                                    <button type="button" onClick={() => setShowQuizReviewModal(false)} className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-sm font-bold text-slate-500">✕</button>
+                                </div>
+                                <div className="px-6 pt-3 flex gap-2 shrink-0">
+                                    {[['mistakes', `Mistakes (${quizMistakeWords.length})`], ['history', `History (${quizHistory.length})`]].map(([id, label]) => (
+                                        <button
+                                            key={id}
+                                            onClick={() => setQuizReviewTab(id)}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${quizReviewTab === id ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div className="p-6 overflow-y-auto flex-1 space-y-2">
+                                    {quizReviewTab === 'mistakes' ? (
+                                        quizMistakeWords.length === 0 ? (
+                                            <p className="text-sm text-slate-400 text-center py-8">No mistakes tracked yet.</p>
+                                        ) : (
+                                            quizMistakeWords.map(w => {
+                                                const sel = quizMistakeSelection;
+                                                const isChecked = sel === null || sel.includes(w.id);
+                                                return (
+                                                    <label key={w.id} className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer">
+                                                        <span className="flex items-center gap-2 min-w-0">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={isChecked}
+                                                                onChange={() => {
+                                                                    setQuizMistakeSelection(prev => {
+                                                                        const base = prev === null ? quizMistakeWords.map(x => x.id) : prev;
+                                                                        return base.includes(w.id) ? base.filter(id => id !== w.id) : [...base, w.id];
+                                                                    });
+                                                                }}
+                                                                className="shrink-0"
+                                                            />
+                                                            <span className="text-sm font-semibold text-slate-800 truncate">{w.word}</span>
+                                                        </span>
+                                                        <span className="text-[11px] text-rose-500 font-bold shrink-0">missed ×{w.__missCount}</span>
+                                                    </label>
+                                                );
+                                            })
+                                        )
+                                    ) : (
+                                        quizHistory.length === 0 ? (
+                                            <p className="text-sm text-slate-400 text-center py-8">No quiz attempts yet.</p>
+                                        ) : (
+                                            quizHistory.map((h, i) => (
+                                                <div key={h.id} className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-slate-100">
+                                                    <div className="min-w-0">
+                                                        <div className="text-xs font-bold text-slate-800">
+                                                            Quiz #{quizHistory.length - i} {h.isReview && <span className="text-rose-500">(Review)</span>}
+                                                        </div>
+                                                        <div className="text-[11px] text-slate-400">{new Date(h.date).toLocaleString()} · {h.types.join(', ')}</div>
+                                                    </div>
+                                                    <span className={`text-xs font-black shrink-0 ${h.score === h.total ? 'text-emerald-600' : 'text-slate-700'}`}>{h.score}/{h.total}</span>
+                                                </div>
+                                            ))
+                                        )
+                                    )}
+                                </div>
+
+                                {quizReviewTab === 'mistakes' && quizMistakeWords.length > 0 && (
+                                    <div className="px-6 pb-6 pt-2 border-t border-slate-100 shrink-0">
+                                        <button
+                                            onClick={() => {
+                                                const sel = quizMistakeSelection;
+                                                const chosen = sel === null ? quizMistakeWords : quizMistakeWords.filter(w => sel.includes(w.id));
+                                                if (!chosen.length) { triggerToast('Select at least one word.'); return; }
+                                                setShowQuizReviewModal(false);
+                                                buildAndStartQuiz(chosen);
+                                            }}
+                                            className="w-full py-2.5 bg-rose-600 text-white font-bold rounded-xl hover:bg-rose-700 transition-all text-sm"
+                                        >
+                                            ▶ Start Review Quiz
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MODAL: WORD QUEST MISTAKE REVIEW + HISTORY */}
+                    {showGameReviewModal && (
+                        <div
+                            className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+                            onClick={(e) => { if (e.target === e.currentTarget) setShowGameReviewModal(false); }}
+                        >
+                            <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+                                <div className="px-6 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between shrink-0">
+                                    <h3 className="text-lg font-extrabold text-slate-900">🎮 Word Quest</h3>
+                                    <button type="button" onClick={() => setShowGameReviewModal(false)} className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-sm font-bold text-slate-500">✕</button>
+                                </div>
+                                <div className="px-6 pt-3 flex gap-2 shrink-0">
+                                    {[['mistakes', `Mistakes (${gameMistakeWords.length})`], ['history', `History (${gameHistory.length})`]].map(([id, label]) => (
+                                        <button
+                                            key={id}
+                                            onClick={() => setGameReviewTab(id)}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${gameReviewTab === id ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div className="p-6 overflow-y-auto flex-1 space-y-2">
+                                    {gameReviewTab === 'mistakes' ? (
+                                        gameMistakeWords.length === 0 ? (
+                                            <p className="text-sm text-slate-400 text-center py-8">No missed words tracked yet.</p>
+                                        ) : (
+                                            gameMistakeWords.map(w => {
+                                                const sel = gameMistakeSelection;
+                                                const isChecked = sel === null || sel.includes(w.id);
+                                                return (
+                                                    <label key={w.id} className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer">
+                                                        <span className="flex items-center gap-2 min-w-0">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={isChecked}
+                                                                onChange={() => {
+                                                                    setGameMistakeSelection(prev => {
+                                                                        const base = prev === null ? gameMistakeWords.map(x => x.id) : prev;
+                                                                        return base.includes(w.id) ? base.filter(id => id !== w.id) : [...base, w.id];
+                                                                    });
+                                                                }}
+                                                                className="shrink-0"
+                                                            />
+                                                            <span className="text-sm font-semibold text-slate-800 truncate">{w.word}</span>
+                                                        </span>
+                                                        <span className="text-[11px] text-rose-500 font-bold shrink-0">missed ×{w.__missCount}</span>
+                                                    </label>
+                                                );
+                                            })
+                                        )
+                                    ) : (
+                                        gameHistory.length === 0 ? (
+                                            <p className="text-sm text-slate-400 text-center py-8">No Word Quest rounds played yet.</p>
+                                        ) : (
+                                            gameHistory.map((h, i) => (
+                                                <div key={h.id} className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-slate-100">
+                                                    <div className="min-w-0">
+                                                        <div className="text-xs font-bold text-slate-800">
+                                                            Round #{gameHistory.length - i} · {h.mode} {h.isReview && <span className="text-rose-500">(Review)</span>}
+                                                        </div>
+                                                        <div className="text-[11px] text-slate-400">{new Date(h.date).toLocaleString()} · {h.questionsAnswered} answered · {h.missed} missed</div>
+                                                    </div>
+                                                    <span className="text-xs font-black shrink-0 text-indigo-600">{h.score} pts</span>
+                                                </div>
+                                            ))
+                                        )
+                                    )}
+                                </div>
+
+                                {gameReviewTab === 'mistakes' && gameMistakeWords.length > 0 && (
+                                    <div className="px-6 pb-6 pt-2 border-t border-slate-100 shrink-0">
+                                        <button
+                                            onClick={() => {
+                                                const sel = gameMistakeSelection;
+                                                const chosen = sel === null ? gameMistakeWords : gameMistakeWords.filter(w => sel.includes(w.id));
+                                                if (!chosen.length) { triggerToast('Select at least one word.'); return; }
+                                                setShowGameReviewModal(false);
+                                                startGameReview(chosen);
+                                            }}
+                                            className="w-full py-2.5 bg-rose-600 text-white font-bold rounded-xl hover:bg-rose-700 transition-all text-sm"
+                                        >
+                                            ▶ Enter Review Mode
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
@@ -6721,6 +7110,33 @@ Rules:
                                     Start Quiz →
                                 </button>
                             </div>
+
+                            {/* MISTAKE REVIEW + HISTORY */}
+                            <div className="bg-white rounded-2xl border border-slate-200 shadow-md p-6 flex items-center justify-between gap-4 flex-wrap">
+                                <div>
+                                    <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-1.5">📉 Mistake Review</h3>
+                                    <p className="text-xs text-slate-500 mt-0.5">
+                                        {quizMistakeWords.length > 0
+                                            ? `${quizMistakeWords.length} word${quizMistakeWords.length === 1 ? '' : 's'} you've gotten wrong in past quizzes.`
+                                            : "No mistakes tracked yet — they'll show up here after you miss a question."}
+                                    </p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => { setQuizMistakeSelection(null); setQuizReviewTab('mistakes'); setShowQuizReviewModal(true); }}
+                                        disabled={quizMistakeWords.length === 0}
+                                        className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                                    >
+                                        Review Mistakes
+                                    </button>
+                                    <button
+                                        onClick={() => { setQuizReviewTab('history'); setShowQuizReviewModal(true); }}
+                                        className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100 transition-all"
+                                    >
+                                        📜 History
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -6939,7 +7355,7 @@ Rules:
                                         </button>
                                     ) : (
                                         <button
-                                            onClick={() => setQuizPhase('done')}
+                                            onClick={finishQuiz}
                                             className="w-full py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition-all"
                                         >
                                             Finish Quiz 🎉
@@ -6984,8 +7400,13 @@ Rules:
                         );
                     })()}
 
-                    {activeTab === 'quiz' && quizPhase === 'done' && (
-                        <div className="max-w-xl mx-auto">
+                    {activeTab === 'quiz' && quizPhase === 'done' && (() => {
+                        const lastAttempt = quizHistory[0];
+                        const lastMistakeWords = lastAttempt ? resolveMistakeWords(
+                            Object.fromEntries((lastAttempt.mistakeIds || []).map(id => [id, { count: 1, last: lastAttempt.date }]))
+                        ) : [];
+                        return (
+                        <div className="max-w-xl mx-auto space-y-4">
                             <div className="bg-white rounded-2xl border border-slate-200 shadow-md p-8 text-center space-y-4">
                                 <h2 className="text-3xl font-extrabold text-slate-900">Quiz Completed! 🎉</h2>
                                 <p className="text-slate-600 text-base">
@@ -6993,7 +7414,7 @@ Rules:
                                 </p>
                                 <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
                                     <button
-                                        onClick={buildAndStartQuiz}
+                                        onClick={() => buildAndStartQuiz()}
                                         className="px-6 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-md hover:bg-indigo-700 transition-all"
                                     >
                                         Retake (same settings)
@@ -7006,15 +7427,33 @@ Rules:
                                     </button>
                                 </div>
                             </div>
+
+                            {lastMistakeWords.length > 0 && (
+                                <div className="bg-white rounded-2xl border border-rose-200 shadow-md p-6 space-y-3">
+                                    <h3 className="text-sm font-extrabold text-slate-900">You missed {lastMistakeWords.length} word{lastMistakeWords.length === 1 ? '' : 's'} this time</h3>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {lastMistakeWords.map(w => (
+                                            <span key={w.id} className="text-xs bg-rose-50 text-rose-700 border border-rose-200 px-2.5 py-1 rounded-full font-semibold">{w.word}</span>
+                                        ))}
+                                    </div>
+                                    <button
+                                        onClick={() => buildAndStartQuiz(lastMistakeWords)}
+                                        className="w-full py-2.5 bg-rose-600 text-white font-bold rounded-xl hover:bg-rose-700 transition-all text-sm"
+                                    >
+                                        Retake Just These Mistakes →
+                                    </button>
+                                </div>
+                            )}
                         </div>
-                    )}
+                        );
+                    })()}
 
                     {/* MODE 4: MODERN GAME MODE */}
                     {activeTab === 'game' && (
                         <ModernVocabGame
                             userXP={userXP}
                             userLevel={userLevel}
-                            wordPool={playablePool}
+                            wordPool={gameWordPool}
                             showBangla={showBangla}
                             triggerToast={triggerToast}
                             onVictoryXP={addXP}
@@ -7026,6 +7465,13 @@ Rules:
                             fieldVisibility={fieldVisibility}
                             familiarityMap={currentFamiliarityMap}
                             onSetFamiliarity={setWordFamiliarity}
+                            onGameFinished={handleGameFinished}
+                            onReviewMissed={startGameReview}
+                            reviewActive={!!gameReviewPool}
+                            reviewCount={gameReviewCount}
+                            onExitReview={exitGameReview}
+                            mistakeBankCount={gameMistakeWords.length}
+                            onOpenMistakeBank={(tab) => { setGameReviewTab(tab || 'mistakes'); setGameMistakeSelection(null); setShowGameReviewModal(true); }}
                         />
                     )}
 
