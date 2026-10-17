@@ -663,6 +663,10 @@
 
         const speakWord = (text, accent, notify, options) => SpeechEngine.speakText(text, accent, notify, options);
 
+        // Calendar-day key in the user's OWN timezone (YYYY-MM-DD). toISOString() uses UTC,
+        // which would flip "today" at the wrong hour for anyone outside UTC.
+        const localDateKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
         // Default field visibility — every field on, matching current behavior.
         // "word" itself has no toggle since it must always show.
         const DEFAULT_FIELD_VISIBILITY = {
@@ -729,6 +733,110 @@
         // No edit/delete/familiarity controls since games don't manage word data.
         // Small chevron icon button used to expand/collapse the synonyms & antonyms
         // section — sits top-right on every card (Word List, Games, Practice Quiz).
+        // Multi-select dropdown whose rows can show a progress bar (a native <select>
+        // can't do either). `values` is an array; an empty array means "no filter / all".
+        // options: [{ value, label, right, segments:[{pct, cls}] }]
+        const BarSelect = ({ values, onChange, options, title, closedText, allLabel = 'All', clearLabel = 'Show all' }) => {
+            const [open, setOpen] = useState(false);
+            const wrapRef = useRef(null);
+            useEffect(() => {
+                if (!open) return;
+                const close = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+                const esc = (e) => { if (e.key === 'Escape') setOpen(false); };
+                document.addEventListener('mousedown', close);
+                document.addEventListener('touchstart', close);
+                document.addEventListener('keydown', esc);
+                return () => {
+                    document.removeEventListener('mousedown', close);
+                    document.removeEventListener('touchstart', close);
+                    document.removeEventListener('keydown', esc);
+                };
+            }, [open]);
+            const isOn = (v) => values.some(x => String(x) === String(v));
+            const toggle = (v) => onChange(isOn(v) ? values.filter(x => String(x) !== String(v)) : [...values, v]);
+            // Wide + bold: white "empty" track with a thick border, so the unfamiliar part reads as blank.
+            const Bar = ({ segments }) => (
+                <div className="flex w-full h-4 rounded-full bg-white border-2 border-slate-300 overflow-hidden shadow-inner">
+                    {(segments || []).map((seg, i) => (
+                        <div key={i} className={`${seg.cls} transition-all duration-500`} style={{ width: `${seg.pct}%` }} />
+                    ))}
+                </div>
+            );
+            return (
+                <div className="relative" ref={wrapRef}>
+                    <button
+                        type="button"
+                        title={title}
+                        onClick={() => setOpen(o => !o)}
+                        className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center gap-2 whitespace-nowrap"
+                    >
+                        <span>{closedText}</span>
+                        <span className="text-[10px] text-slate-500">▾</span>
+                    </button>
+                    {open && (
+                        <div className="absolute left-0 top-full mt-1 z-50 w-max min-w-[28rem] max-w-[94vw] max-h-96 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-xl p-1">
+                            <div className="sticky top-0 z-10 bg-white flex items-center justify-between gap-2 px-2.5 py-1.5 border-b border-slate-100 mb-1">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tick one or more</span>
+                                <span className="flex items-center gap-2">
+                                    <button type="button" onClick={() => onChange(options.map(o => o.value))} className="text-[11px] font-bold text-indigo-600 hover:underline">{allLabel}</button>
+                                    <button type="button" onClick={() => onChange([])} className="text-[11px] font-bold text-slate-500 hover:underline">{clearLabel}</button>
+                                </span>
+                            </div>
+                            {options.map(o => {
+                                const active = isOn(o.value);
+                                return (
+                                    <button
+                                        key={String(o.value)}
+                                        type="button"
+                                        onClick={() => toggle(o.value)}
+                                        className={`w-full text-left px-2.5 py-2 rounded-lg transition-colors flex items-center gap-3 ${active ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}
+                                    >
+                                        <span className={`w-4 h-4 shrink-0 rounded border-2 flex items-center justify-center text-[10px] leading-none font-black ${active ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-300 text-transparent'}`}>✓</span>
+                                        <span className="flex-1 text-xs font-bold text-indigo-900 whitespace-nowrap">{o.label}</span>
+                                        <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap w-16 text-right">{o.right}</span>
+                                        <span className="w-44 shrink-0"><Bar segments={o.segments} /></span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // On/off switch (green + "ON" when enabled, grey + "OFF" when not)
+        const ToggleSwitch = ({ checked, onChange, disabled = false, label }) => (
+            <button
+                type="button"
+                role="switch"
+                aria-checked={checked}
+                aria-label={label}
+                disabled={disabled}
+                onClick={onChange}
+                className={`relative shrink-0 w-[58px] h-[30px] rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed ${checked ? 'bg-green-500' : 'bg-slate-300'}`}
+            >
+                <span className={`absolute top-1/2 -translate-y-1/2 text-[10px] font-extrabold tracking-wide select-none ${checked ? 'left-2.5 text-white' : 'right-2 text-slate-600'}`}>{checked ? 'ON' : 'OFF'}</span>
+                <span className={`absolute top-[3px] w-6 h-6 rounded-full bg-white shadow-md transition-all duration-200 ${checked ? 'left-[31px]' : 'left-[3px]'}`} />
+            </button>
+        );
+
+        // One settings line: label (+ optional hint) on the left, switch on the right.
+        const ToggleRow = ({ label, hint, checked, onToggle, disabled = false, appTheme = 'light', emphasis = false }) => (
+            <div
+                className={`flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 transition-opacity ${disabled ? 'opacity-45' : ''} ${
+                    appTheme === 'light' ? (emphasis ? 'bg-white border-slate-300 shadow-sm' : 'bg-white border-slate-200')
+                    : appTheme === 'aurora' ? 'bg-white/10 border-white/20'
+                    : 'bg-slate-900/60 border-slate-700'
+                }`}
+            >
+                <div className="min-w-0">
+                    <div className={`font-bold ${emphasis ? 'text-sm' : 'text-xs'}`}>{label}</div>
+                    {hint && <div className="text-[11px] opacity-60 mt-0.5 leading-snug">{hint}</div>}
+                </div>
+                <ToggleSwitch checked={checked} onChange={onToggle} disabled={disabled} label={label} />
+            </div>
+        );
+
         const ExpandToggleIcon = ({ expanded, onClick, className = '' }) => (
             <button
                 type="button"
@@ -1514,7 +1622,7 @@
             };
         })();
 
-        function ModernVocabGame({ wordPool, showBangla, triggerToast, onVictoryXP, appTheme, onThemeChange, shortcuts, globalSound, speechAccent = 'us', fieldVisibility = DEFAULT_FIELD_VISIBILITY, familiarityMap = null, onSetFamiliarity = null }) {
+        function ModernVocabGame({ userXP = 0, userLevel = 1, wordPool, showBangla, triggerToast, onVictoryXP, appTheme, onThemeChange, shortcuts, globalSound, speechAccent = 'us', fieldVisibility = DEFAULT_FIELD_VISIBILITY, familiarityMap = null, onSetFamiliarity = null }) {
             const [gameMode, setGameMode] = useState('menu'); // 'menu','classic','speed','match','fillin','truefalse','synant'
             const [gameState, setGameState] = useState('idle'); // 'idle','playing','summary','paused'
             const [score, setScore] = useState(0);
@@ -1658,6 +1766,24 @@
                 if (!wordPool || wordPool.length < 4) return [];
                 return wordPool;
             }, [wordPool]);
+
+            // If the selected chunk (or any filter) changes the actual set of words, return to
+            // the menu so a round that was already running with the OLD chunk's questions
+            // doesn't keep going. Signature uses ids only, so familiarity updates mid-game
+            // don't trigger a reset.
+            const poolSignature = useMemo(
+                () => (wordPool || []).map(w => w.id).sort().join('|'),
+                [wordPool]
+            );
+            const lastPoolSignatureRef = useRef(poolSignature);
+            useEffect(() => {
+                if (lastPoolSignatureRef.current === poolSignature) return;
+                lastPoolSignatureRef.current = poolSignature;
+                clearInterval(speedTimerRef.current);
+                setSpeedTimerActive(false);
+                setGameState('idle');
+                setGameMode('menu');
+            }, [poolSignature]);
 
             const makeQuestion = useCallback((pool) => {
                 if (!pool || pool.length < 4) return null;
@@ -2169,6 +2295,15 @@
                     {!isImmersive && (
                         <div className="flex items-center justify-between flex-wrap gap-3">
                             <h2 className={`text-xl font-black flex items-center gap-2 ${appTheme === 'light' ? 'text-slate-800' : 'text-white'}`}>🎮 Word Quest</h2>
+                            {/* Player level lives here now (moved out of the main top bar) */}
+                            <div className="flex items-center gap-2 bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-400/40 rounded-xl px-3 py-1.5" title={`${userXP} total XP earned`}>
+                                <span className="text-lg">🏆</span>
+                                <div className="leading-tight">
+                                    <div className={`text-[11px] font-black ${appTheme === 'light' ? 'text-amber-700' : 'text-amber-300'}`}>LEVEL {userLevel} LEARNER</div>
+                                    <div className={`text-[10px] ${appTheme === 'light' ? 'text-slate-500' : 'text-amber-100/80'}`}>{userXP % 100}/100 XP · {userXP} total</div>
+                                </div>
+                                <div className="w-16 h-1.5 rounded-full bg-slate-400/30 overflow-hidden"><div className="h-full bg-amber-400" style={{ width: `${userXP % 100}%` }} /></div>
+                            </div>
                             <FocusControls />
                         </div>
                     )}
@@ -2818,7 +2953,22 @@
             useEffect(() => {
                 localStorage.setItem('wordsmart_activity_log', JSON.stringify(activityLog));
             }, [activityLog]);
-            const todayKey = () => new Date().toISOString().slice(0, 10);
+            const todayKey = () => localDateKey();
+            // DAILY WORD GOAL — new words marked Familiar per day (set in Word Manager)
+            const MIN_DAILY_GOAL = 1, MAX_DAILY_GOAL = 100;
+            const [dailyGoal, setDailyGoal] = useState(() => {
+                try {
+                    const n = parseInt(localStorage.getItem('wordsmart_daily_goal'), 10);
+                    if (Number.isFinite(n)) return Math.min(MAX_DAILY_GOAL, Math.max(MIN_DAILY_GOAL, n));
+                } catch (e) {}
+                return 10;
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_daily_goal', String(dailyGoal)); } catch (e) {} }, [dailyGoal]);
+            const updateDailyGoal = (val) => setDailyGoal(Math.min(MAX_DAILY_GOAL, Math.max(MIN_DAILY_GOAL, parseInt(val, 10) || 10)));
+            const openDailyGoalSettings = () => {
+                setActiveTab('manage');
+                setTimeout(() => document.getElementById('daily-goal-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
+            };
             const logActivity = (xpAmount = 0, learnedAmount = 0) => {
                 const key = todayKey();
                 setActivityLog(prev => {
@@ -2857,7 +3007,8 @@
             // TAB & NAVIGATION STATE
             const [activeTab, setActiveTab] = useState('list');
             const [searchQuery, setSearchQuery] = useState('');
-            const [filterFamiliarity, setFilterFamiliarity] = useState('all');
+            // Multi-select: empty array = no filter (show every status)
+            const [filterFamiliarities, setFilterFamiliarities] = useState([]);
             const [selectedLetter, setSelectedLetter] = useState('ALL');
             // SORT: 'default' keeps original list order. Name sorts alphabetically;
             // date uses each word's id, which is timestamp-based, so it doubles as
@@ -2865,8 +3016,25 @@
             const [sortBy, setSortBy] = useState('name-asc');
 
             // MEMORIZATION CHUNKS SYSTEM (25 words per chunk)
-            const [selectedChunk, setSelectedChunk] = useState('ALL');
-            const CHUNK_SIZE = 25;
+            // Multi-select: empty array = all chunks. Values are chunk indexes (0-based).
+            const [selectedChunks, setSelectedChunks] = useState([]);
+            // Words per chunk — adjustable in Word Manager (5–50), remembered between visits.
+            const MIN_CHUNK_SIZE = 5, MAX_CHUNK_SIZE = 50;
+            const [chunkSize, setChunkSize] = useState(() => {
+                try {
+                    const n = parseInt(localStorage.getItem('wordsmart_chunk_size'), 10);
+                    if (Number.isFinite(n)) return Math.min(MAX_CHUNK_SIZE, Math.max(MIN_CHUNK_SIZE, n));
+                } catch (e) {}
+                return 25;
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_chunk_size', String(chunkSize)); } catch (e) {} }, [chunkSize]);
+            const CHUNK_SIZE = chunkSize;
+            const updateChunkSize = (val) => {
+                const n = Math.min(MAX_CHUNK_SIZE, Math.max(MIN_CHUNK_SIZE, parseInt(val, 10) || 25));
+                setChunkSize(n);
+                setSelectedChunks([]); // chunk numbers shift when the size changes, so go back to "all"
+                setCardIndex(0);
+            };
 
             const normalizeText = (value) => {
                 if (value == null) return '';
@@ -2874,7 +3042,7 @@
             };
 
             const resetListFilters = useCallback(() => {
-                setSelectedChunk('ALL');
+                setSelectedChunks([]);
                 setSelectedLetter('ALL');
                 setCardIndex(0);
             }, []);
@@ -3506,7 +3674,7 @@ Rules:
                 const walkBack = (startDate) => {
                     let count = 0;
                     let cursor = new Date(startDate);
-                    while (activeDateSet.has(cursor.toISOString().slice(0, 10))) {
+                    while (activeDateSet.has(localDateKey(cursor))) {
                         count++;
                         cursor.setDate(cursor.getDate() - 1);
                     }
@@ -3522,6 +3690,24 @@ Rules:
             }, [activeDateSet]);
 
             const todaysActivity = activityLog[todayKey()] || { xp: 0, learned: 0 };
+
+            // Last 7 / 30 days totals + a per-day list, for the Stats tab
+            const periodStats = useMemo(() => {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const days = [];
+                for (let i = 29; i >= 0; i--) {
+                    const d = new Date(today);
+                    d.setDate(today.getDate() - i);
+                    const key = localDateKey(d);
+                    const e = activityLog[key] || {};
+                    days.push({ key, date: d, learned: e.learned || 0, xp: e.xp || 0 });
+                }
+                const sum = (arr, f) => arr.reduce((a, x) => a + x[f], 0);
+                const week = days.slice(-7);
+                return { week, weekLearned: sum(week, 'learned'), weekXp: sum(week, 'xp'), monthLearned: sum(days, 'learned'), monthXp: sum(days, 'xp') };
+            }, [activityLog]);
+            const [statsSelectedDate, setStatsSelectedDate] = useState(() => localDateKey());
 
             // STUDY CALENDAR (month grid)
             const [statsCalendarOffset, setStatsCalendarOffset] = useState(0);
@@ -3554,7 +3740,7 @@ Rules:
                     for (let d = 0; d < 7; d++) {
                         const dt = new Date(startSunday);
                         dt.setDate(startSunday.getDate() + w * 7 + d);
-                        const key = dt.toISOString().slice(0, 10);
+                        const key = localDateKey(dt);
                         const entry = activityLog[key];
                         const score = entry ? (entry.xp || 0) + (entry.learned || 0) * 10 : 0;
                         const level = score <= 0 ? 0 : score < 20 ? 1 : score < 50 ? 2 : score < 100 ? 3 : 4;
@@ -3861,6 +4047,14 @@ Rules:
                 triggerToast("Restored all deleted words back to list!");
             };
 
+            // Words sorted A→Z — used as the basis for chunk boundaries so chunk 1
+            // always starts at "A", chunk 2 picks up right after it alphabetically,
+            // and so on, regardless of the order words were originally added in or
+            // whatever the "Sort by" dropdown is currently set to.
+            const alphabeticalWords = useMemo(() => {
+                return [...currentWords].sort((a, b) => (a?.word || '').localeCompare(b?.word || ''));
+            }, [currentWords]);
+
             // Chunks calculation
             const chunksList = useMemo(() => {
                 const total = currentWords.length;
@@ -3874,7 +4068,39 @@ Rules:
                         label: `Chunk ${i + 1} (${start + 1}–${end})`
                     };
                 });
-            }, [currentWords.length]);
+            }, [currentWords.length, CHUNK_SIZE]);
+
+            // Progress stats for the Chunk + Status filters. Counts include each word's
+            // synonym/antonym entries (when those fields are visible), same as the
+            // quiz/game pool, and use each entry's own familiarity level.
+            const tallyWords = (words) => {
+                let total = 0, familiar = 0, semi = 0;
+                const count = (id) => {
+                    total++;
+                    const lvl = getWordFamiliarityLevel(currentFamiliarityMap, id);
+                    if (lvl === 'familiar') familiar++;
+                    else if (lvl === 'semi') semi++;
+                };
+                words.forEach(w => {
+                    count(w.id);
+                    if (fieldVisibility.synonyms) (w.synonyms || []).forEach((r, i) => count(getRelatedEntryId(w.id, 'syn', i, r)));
+                    if (fieldVisibility.antonyms) (w.antonyms || []).forEach((r, i) => count(getRelatedEntryId(w.id, 'ant', i, r)));
+                });
+                return { total, familiar, semi, unfamiliar: total - familiar - semi };
+            };
+            const chunkStats = useMemo(() => {
+                const chunks = chunksList.map(c => tallyWords(alphabeticalWords.slice(c.index * CHUNK_SIZE, (c.index + 1) * CHUNK_SIZE)));
+                return { all: tallyWords(currentWords), chunks };
+            }, [chunksList, alphabeticalWords, currentWords, currentFamiliarityMap, fieldVisibility.synonyms, fieldVisibility.antonyms, CHUNK_SIZE]);
+            // Status counts follow whichever chunk is selected, so the numbers match what you'd see.
+            const statusStats = useMemo(() => {
+                const picked = selectedChunks.filter(i => chunkStats.chunks[i]);
+                if (!picked.length) return chunkStats.all;
+                return picked.reduce((acc, i) => {
+                    const c = chunkStats.chunks[i];
+                    return { total: acc.total + c.total, familiar: acc.familiar + c.familiar, semi: acc.semi + c.semi, unfamiliar: acc.unfamiliar + c.unfamiliar };
+                }, { total: 0, familiar: 0, semi: 0, unfamiliar: 0 });
+            }, [chunkStats, selectedChunks]);
 
             // Alphabet list generator
             const alphabet = useMemo(() => {
@@ -3888,32 +4114,38 @@ Rules:
 
             // Filtered Words calculation
             const filteredWords = useMemo(() => {
-                let list = [...currentWords];
-
-                const parsedChunk = Number(selectedChunk);
-                if (selectedChunk !== 'ALL' && Number.isInteger(parsedChunk) && parsedChunk >= 0) {
-                    const start = parsedChunk * CHUNK_SIZE;
-                    const end = start + CHUNK_SIZE;
-                    list = list.slice(start, end);
-                }
+                // Chunk mode slices from the A→Z-sorted list (not raw import order)
+                // so each chunk is a contiguous alphabetical range starting at "A".
+                // With several chunks ticked, their words are joined in chunk order.
+                const pickedChunks = selectedChunks.filter(i => Number.isInteger(i) && i >= 0).sort((a, b) => a - b);
+                let list = pickedChunks.length === 0
+                    ? [...currentWords]
+                    : pickedChunks.flatMap(i => alphabeticalWords.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE));
 
                 if (searchQuery) {
                     const q = normalizeText(searchQuery);
                     list = list.filter(w => {
+                        // Also search inside each synonym/antonym entry (the word itself and
+                        // its meanings), so a word that only exists in someone's synonym or
+                        // antonym list still brings up the main word it belongs to.
+                        const relatedText = [...(w?.synonyms || []), ...(w?.antonyms || [])]
+                            .map(r => [r?.word, r?.meaning_en, r?.meaning_bn, r?.meaning, r?.bangla].filter(Boolean).join(' '))
+                            .join(' ');
                         const searchable = [
                             w?.word,
                             w?.meaning,
                             w?.bangla,
                             w?.meaning_en,
                             w?.meaning_bn,
-                            w?.context_main
+                            w?.context_main,
+                            relatedText
                         ].filter(Boolean).join(' ');
                         return normalizeText(searchable).includes(q);
                     });
                 }
 
-                if (filterFamiliarity !== 'all') {
-                    list = list.filter(w => getWordFamiliarityLevel(currentFamiliarityMap, w.id) === filterFamiliarity);
+                if (filterFamiliarities.length > 0) {
+                    list = list.filter(w => filterFamiliarities.includes(getWordFamiliarityLevel(currentFamiliarityMap, w.id)));
                 }
 
                 if (selectedLetter !== 'ALL') {
@@ -3940,7 +4172,7 @@ Rules:
                 }
 
                 return list;
-            }, [currentWords, selectedChunk, searchQuery, filterFamiliarity, selectedLetter, currentFamiliarityMap, showBangla, isShuffled, shuffleSeed, sortBy]);
+            }, [currentWords, alphabeticalWords, selectedChunks, CHUNK_SIZE, searchQuery, filterFamiliarities, selectedLetter, currentFamiliarityMap, showBangla, isShuffled, shuffleSeed, sortBy]);
 
             // Playable pool: same as filteredWords, but with each word's synonyms/antonyms
             // flattened in as their own standalone playable items (so they can show up in
@@ -4033,13 +4265,13 @@ Rules:
 
             useEffect(() => {
                 setCurrentPage(1);
-            }, [searchQuery, selectedLetter, selectedChunk, filterFamiliarity, activeTab, activeBook.id]);
+            }, [searchQuery, selectedLetter, selectedChunks, filterFamiliarities, activeTab, activeBook.id]);
 
             useEffect(() => {
-                if (selectedChunk !== 'ALL' && Number.isInteger(Number(selectedChunk)) && Number(selectedChunk) >= chunksList.length) {
-                    setSelectedChunk('ALL');
+                if (selectedChunks.some(i => i >= chunksList.length)) {
+                    setSelectedChunks(prev => prev.filter(i => i < chunksList.length));
                 }
-            }, [chunksList.length, selectedChunk]);
+            }, [chunksList.length, selectedChunks]);
 
             useEffect(() => {
                 if (selectedLetter !== 'ALL' && !alphabet.includes(selectedLetter)) {
@@ -4124,8 +4356,8 @@ Rules:
                 // which made the Status filter appear broken.
                 const pool = playablePool;
                 if (pool.length < 4) {
-                    const filterNote = filterFamiliarity && filterFamiliarity !== 'all'
-                        ? ` (currently filtered to "${filterFamiliarity}" — try a different filter or add more words to that status)`
+                    const filterNote = filterFamiliarities.length > 0
+                        ? ` (currently filtered to ${filterFamiliarities.join(' + ')} — try a different filter or add more words to those statuses)`
                         : '';
                     triggerToast(`Please ensure you have at least 4 words in the selected list to generate a quiz!${filterNote}`);
                     return;
@@ -4133,7 +4365,10 @@ Rules:
                 const countNum = quizQuestionCount === 'all'
                     ? Math.min(pool.length, 50)
                     : Math.max(1, Math.min(Number(quizQuestionCount) || 10, 100));
-                const questions = buildQuizQuestions(pool, currentWords, quizTypes, countNum);
+                // Pass `pool` as BOTH the question source and the wrong-answer source, so every
+                // question AND every option comes from the selected chunk (previously the wrong
+                // options were drawn from the whole book, which made other chunks leak in).
+                const questions = buildQuizQuestions(pool, pool, quizTypes, countNum);
                 if (!questions.length) {
                     triggerToast("Couldn't generate that question type — try selecting more types, or add synonym/antonym data to your words first!");
                     return;
@@ -4193,7 +4428,7 @@ Rules:
             // Reset to the setup screen whenever the quiz tab is (re)entered or the pool changes
             useEffect(() => {
                 if (activeTab === 'quiz') setQuizPhase('setup');
-            }, [activeTab, selectedChunk, selectedBookId, filterFamiliarity]);
+            }, [activeTab, selectedChunks, selectedBookId, filterFamiliarities]);
 
             // Per-question countdown timer (only in 'perQuestion' timer mode)
             useEffect(() => {
@@ -4247,7 +4482,7 @@ Rules:
             }, [playablePool.length]);
 
             useEffect(() => {
-                setSelectedChunk('ALL');
+                setSelectedChunks([]);
                 setSelectedLetter('ALL');
             }, [selectedBookId]);
 
@@ -4257,7 +4492,7 @@ Rules:
                 }
                 setIsFlipped(false);
                 setCardDetailsExpanded(false);
-            }, [cardIndex, activeTab, selectedChunk, selectedBookId]);
+            }, [cardIndex, activeTab, selectedChunks, selectedBookId]);
 
             // Unified Bulk JSON Import supporting the current rich schema, with fallback for older flat-field exports
             const handleBulkImport = () => {
@@ -5188,16 +5423,16 @@ Rules:
                     )}
 
                     {/* APP HEADER */}
-                    <header className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 rounded-2xl p-6 text-white shadow-xl mb-6">
+                    <header className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 rounded-2xl p-4 text-white shadow-xl mb-4">
                         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                             <div>
                                 {/* PAGE / BOOK SWITCHER */}
-                                <div className="flex flex-wrap items-center gap-2 mb-3">
+                                <div className="flex flex-wrap items-center gap-2 mb-2">
                                     <div className="bg-white/10 p-1 rounded-xl border border-white/20 flex flex-wrap gap-1 items-center">
                                         {books.map(b => (
                                             <button
                                                 key={b.id}
-                                                onClick={() => { setSelectedBookId(b.id); setSelectedChunk('ALL'); }}
+                                                onClick={() => { setSelectedBookId(b.id); setSelectedChunks([]); }}
                                                 className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
                                                     selectedBookId === b.id
                                                         ? 'keep-white bg-white text-indigo-900 shadow-sm'
@@ -5233,32 +5468,39 @@ Rules:
                                     </button>
                                 </div>
 
-                                {/* APP TITLE */}
-                                <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight flex items-center gap-2">
-                                    <span>{activeBook.name} Companion</span>
-                                </h1>
-                                <p className="text-indigo-200 text-xs md:text-sm mt-1">
-                                    Welcome back! Ready to grow your vocabulary today? ✨
-                                </p>
+                                {/* APP TITLE + WELCOME MESSAGE — grouped together with even
+                                    spacing above (from the switcher row) and below (to the
+                                    header's own padding), so the block doesn't look lopsided. */}
+                                <div className="mt-1">
+                                    <h1 className="text-xl md:text-2xl font-extrabold tracking-tight flex items-center gap-2">
+                                        <span>{activeBook.name} Companion</span>
+                                    </h1>
+                                    <p className="text-indigo-200/80 text-xs sm:text-sm font-medium mt-1">
+                                        Welcome back! Ready to grow your vocabulary today? ✨
+                                    </p>
+                                </div>
                             </div>
 
-                            {/* MASTERY & LEVEL CONTROLS */}
-                            <div className="flex flex-col sm:flex-row md:flex-col gap-3 w-full md:w-auto">
-                                {/* XP LEVEL BADGE */}
-                                <div className="bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-400/30 rounded-xl p-2.5 flex items-center justify-between gap-3 backdrop-blur-md">
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-xl">🏆</span>
-                                        <div>
-                                            <div className="text-xs font-black text-amber-300">LEVEL {userLevel} LEARNER</div>
-                                            <div className="text-[10px] text-amber-100/80">{userXP} Total XP Earned</div>
-                                        </div>
+                            {/* TODAY'S GOAL + FAMILIARITY — compact, side by side */}
+                            <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+                                <div className="bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-400/30 rounded-xl px-3 py-2 backdrop-blur-md sm:min-w-[210px]">
+                                    <div className="flex items-center justify-between gap-2 text-xs font-semibold mb-1">
+                                        <button type="button" onClick={() => setActiveTab('stats')} title="Open Stats & Streak" className="flex-1 flex items-center justify-between gap-2 text-left">
+                                            <span>🎯 Today's goal</span>
+                                            <span className="font-black text-amber-300">{todaysActivity.learned}/{dailyGoal}</span>
+                                        </button>
+                                        <button type="button" onClick={openDailyGoalSettings} title="Change daily goal" className="w-5 h-5 shrink-0 rounded-md bg-white/10 hover:bg-white/25 text-[11px] leading-none flex items-center justify-center">⚙</button>
                                     </div>
-                                    <span className="text-xs font-bold bg-amber-400 text-slate-950 px-2 py-0.5 rounded-md">
-                                        {userXP % 100}/100 XP
-                                    </span>
+                                    <div className="w-full bg-slate-950/40 rounded-full h-2.5 overflow-hidden border border-amber-400/20">
+                                        <div className={`h-full transition-all duration-500 ${todaysActivity.learned >= dailyGoal ? 'bg-emerald-400' : 'bg-amber-400'}`} style={{ width: `${Math.min(100, (todaysActivity.learned / dailyGoal) * 100)}%` }} />
+                                    </div>
+                                    <div className="flex justify-between text-[10px] text-amber-100/80 mt-1">
+                                        <span>{todaysActivity.learned >= dailyGoal ? '🎉 Goal reached!' : `${dailyGoal - todaysActivity.learned} more to go`}</span>
+                                        <span>🔥 {currentStreak}-day streak</span>
+                                    </div>
                                 </div>
 
-                                <div className="bg-white/10 backdrop-blur-md rounded-xl p-3 border border-white/20 min-w-[240px]">
+                                <div className="bg-white/10 backdrop-blur-md rounded-xl px-3 py-2 border border-white/20 sm:min-w-[210px]">
                                     <div className="flex justify-between text-xs font-semibold mb-1">
                                         <span>Familiarity</span>
                                         <span>{currentWords.length > 0 ? Math.round((familiarityCounts.familiar / currentWords.length) * 100) : 0}% familiar</span>
@@ -5275,9 +5517,9 @@ Rules:
                                         )}
                                     </div>
                                     <div className="flex justify-between text-[10px] text-indigo-200 mt-1 gap-1">
-                                        <button type="button" title="Show unfamiliar" onClick={() => setFilterFamiliarity(filterFamiliarity === 'unfamiliar' ? 'all' : 'unfamiliar')} className={`hover:text-white hover:no-underline no-underline transition-colors ${filterFamiliarity==='unfamiliar'?'text-white font-bold':''}`}>○ {familiarityCounts.unfamiliar}</button>
-                                        <button type="button" title="Show semi-familiar" onClick={() => setFilterFamiliarity(filterFamiliarity === 'semi' ? 'all' : 'semi')} className={`hover:text-white hover:no-underline no-underline transition-colors ${filterFamiliarity==='semi'?'text-amber-200 font-bold':''}`}>◐ {familiarityCounts.semi}</button>
-                                        <button type="button" title="Show familiar" onClick={() => setFilterFamiliarity(filterFamiliarity === 'familiar' ? 'all' : 'familiar')} className={`hover:text-white hover:no-underline no-underline transition-colors inline-flex items-center gap-0.5 ${filterFamiliarity==='familiar'?'text-emerald-200 font-bold':''}`}><span style={{fontSize:'16px',lineHeight:1,transform:'translateY(-2px)',display:'inline-block'}}>●</span> {familiarityCounts.familiar}</button>
+                                        <button type="button" title="Show unfamiliar" onClick={() => setFilterFamiliarities(prev => prev.includes('unfamiliar') ? prev.filter(x => x !== 'unfamiliar') : [...prev, 'unfamiliar'])} className={`hover:text-white hover:no-underline no-underline transition-colors ${filterFamiliarities.includes('unfamiliar')?'text-white font-bold':''}`}>○ {familiarityCounts.unfamiliar}</button>
+                                        <button type="button" title="Show semi-familiar" onClick={() => setFilterFamiliarities(prev => prev.includes('semi') ? prev.filter(x => x !== 'semi') : [...prev, 'semi'])} className={`hover:text-white hover:no-underline no-underline transition-colors ${filterFamiliarities.includes('semi')?'text-amber-200 font-bold':''}`}>◐ {familiarityCounts.semi}</button>
+                                        <button type="button" title="Show familiar" onClick={() => setFilterFamiliarities(prev => prev.includes('familiar') ? prev.filter(x => x !== 'familiar') : [...prev, 'familiar'])} className={`hover:text-white hover:no-underline no-underline transition-colors inline-flex items-center gap-0.5 ${filterFamiliarities.includes('familiar')?'text-emerald-200 font-bold':''}`}><span style={{fontSize:'16px',lineHeight:1,transform:'translateY(-2px)',display:'inline-block'}}>●</span> {familiarityCounts.familiar}</button>
                                     </div>
                                 </div>
                             </div>
@@ -5312,39 +5554,56 @@ Rules:
                     {activeTab !== 'manage' && activeTab !== 'stats' && (
                         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm mb-6 flex flex-col md:flex-row items-center justify-between gap-4">
                             <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-                                <label className="flex items-center gap-2 font-bold text-xs text-slate-500 whitespace-nowrap">
+                                <div className="flex items-center gap-2 font-bold text-xs text-slate-500 whitespace-nowrap">
                                     <span>⭕ CHUNK:</span>
-                                    <select
-                                        value={selectedChunk}
-                                        onChange={(e) => {
-                                            const val = e.target.value;
-                                            setSelectedChunk(val === 'ALL' ? 'ALL' : parseInt(val));
-                                            setCardIndex(0);
-                                        }}
-                                        className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                    >
-                                        <option value="ALL">All Words ({currentWords.length} words)</option>
-                                        {chunksList.map(chunk => (
-                                            <option key={chunk.index} value={chunk.index}>
-                                                {chunk.label}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </label>
-                                <label className="flex items-center gap-2 font-bold text-xs text-slate-500 whitespace-nowrap">
+                                    <BarSelect
+                                        title="Tick one or more chunks. Bar: green = familiar, yellow = semi-familiar, blank = not learned yet"
+                                        values={selectedChunks}
+                                        onChange={(vals) => { setSelectedChunks(vals.map(Number).sort((a, b) => a - b)); setCardIndex(0); }}
+                                        allLabel="Select all"
+                                        clearLabel="Show all"
+                                        closedText={
+                                            selectedChunks.length === 0 ? `All Words (${currentWords.length} words)`
+                                            : selectedChunks.length === 1 ? (chunksList[selectedChunks[0]]?.label || 'Chunk')
+                                            : `${selectedChunks.length} chunks selected`
+                                        }
+                                        options={chunksList.map(chunk => {
+                                            const st = chunkStats.chunks[chunk.index] || { total: 0, familiar: 0, semi: 0, unfamiliar: 0 };
+                                            return {
+                                                value: chunk.index,
+                                                label: chunk.label,
+                                                right: `${st.total} words`,
+                                                segments: st.total ? [
+                                                    { pct: (st.familiar / st.total) * 100, cls: 'bg-emerald-500' },
+                                                    { pct: (st.semi / st.total) * 100, cls: 'bg-yellow-400' }
+                                                ] : []
+                                            };
+                                        })}
+                                    />
+                                </div>
+                                <div className="flex items-center gap-2 font-bold text-xs text-slate-500 whitespace-nowrap">
                                     <span>○ STATUS:</span>
-                                    <select
-                                        value={filterFamiliarity}
-                                        onChange={(e) => setFilterFamiliarity(e.target.value)}
-                                        className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 familiarity-select"
-                                        title="Filter by familiarity across all study tabs"
-                                    >
-                                        <option value="all">All words ({currentWords.length})</option>
-                                        <option value="unfamiliar">○ Unfamiliar ({familiarityCounts.unfamiliar})</option>
-                                        <option value="semi">◐ Semi-familiar ({familiarityCounts.semi})</option>
-                                        <option value="familiar">⬤ Familiar ({familiarityCounts.familiar})</option>
-                                    </select>
-                                </label>
+                                    <BarSelect
+                                        title="Tick one or more statuses (applies across all study tabs). Bar = that status's share of the selected chunk(s)"
+                                        values={filterFamiliarities}
+                                        onChange={(vals) => setFilterFamiliarities(vals)}
+                                        allLabel="Select all"
+                                        clearLabel="Show all"
+                                        closedText={
+                                            filterFamiliarities.length === 0 ? `All words (${currentWords.length})`
+                                            : filterFamiliarities.map(v => ({
+                                                unfamiliar: `○ Unfamiliar (${familiarityCounts.unfamiliar})`,
+                                                semi: `◐ Semi-familiar (${familiarityCounts.semi})`,
+                                                familiar: `⬤ Familiar (${familiarityCounts.familiar})`
+                                            }[v])).filter(Boolean).join(' + ')
+                                        }
+                                        options={[
+                                            { value: 'unfamiliar', label: '○ Unfamiliar', right: `${statusStats.unfamiliar}`, segments: [{ pct: statusStats.total ? (statusStats.unfamiliar / statusStats.total) * 100 : 0, cls: 'bg-slate-400' }] },
+                                            { value: 'semi', label: '◐ Semi-familiar', right: `${statusStats.semi}`, segments: [{ pct: statusStats.total ? (statusStats.semi / statusStats.total) * 100 : 0, cls: 'bg-yellow-400' }] },
+                                            { value: 'familiar', label: '⬤ Familiar', right: `${statusStats.familiar}`, segments: [{ pct: statusStats.total ? (statusStats.familiar / statusStats.total) * 100 : 0, cls: 'bg-emerald-500' }] }
+                                        ]}
+                                    />
+                                </div>
                                 <label className="flex items-center gap-2 font-bold text-xs text-slate-500 whitespace-nowrap">
                                     <span>↕ SORT:</span>
                                     <select
@@ -5440,8 +5699,28 @@ Rules:
                         <div className="space-y-4 tab-panel-enter">
                             {/* SEARCH & FILTERS */}
                             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
-                                <div className="flex flex-col md:flex-row gap-3">
-                                    <div className="relative flex-1">
+                                {/* On wide screens: alphabet filter on the left (gets the
+                                    remaining space to spread out), search box on the right,
+                                    wide enough that typed text doesn't get clipped. */}
+                                <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+                                    {/* ALPHABET FILTER */}
+                                    <div className="flex flex-wrap gap-1 order-2 lg:order-1 pt-2 lg:pt-0 border-t lg:border-t-0 lg:border-r border-slate-100 lg:pr-3 lg:flex-1 lg:min-w-0">
+                                        {alphabet.map(letter => (
+                                            <button
+                                                key={letter}
+                                                onClick={() => setSelectedLetter(letter)}
+                                                className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
+                                                    selectedLetter === letter
+                                                        ? 'bg-indigo-600 text-white'
+                                                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                }`}
+                                            >
+                                                {letter}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <div className="relative w-full order-1 lg:order-2 lg:w-96 lg:max-w-[48%] lg:shrink-0">
                                         <input
                                             type="text"
                                             placeholder={showBangla ? "Search word, English meaning, or Bengali (বাংলা)..." : "Search word or English meaning..."}
@@ -5451,23 +5730,6 @@ Rules:
                                         />
                                         <svg className="w-5 h-5 text-slate-400 absolute left-3 top-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                                     </div>
-                                </div>
-
-                                {/* ALPHABET FILTER */}
-                                <div className="flex flex-wrap gap-1 pt-2 border-t border-slate-100">
-                                    {alphabet.map(letter => (
-                                        <button
-                                            key={letter}
-                                            onClick={() => setSelectedLetter(letter)}
-                                            className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
-                                                selectedLetter === letter
-                                                    ? 'bg-indigo-600 text-white'
-                                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                            }`}
-                                        >
-                                            {letter}
-                                        </button>
-                                    ))}
                                 </div>
                             </div>
 
@@ -6327,6 +6589,8 @@ Rules:
                     {/* MODE 4: MODERN GAME MODE */}
                     {activeTab === 'game' && (
                         <ModernVocabGame
+                            userXP={userXP}
+                            userLevel={userLevel}
                             wordPool={playablePool}
                             showBangla={showBangla}
                             triggerToast={triggerToast}
@@ -6373,6 +6637,76 @@ Rules:
                                 </div>
                             </div>
 
+                            {/* DAILY TARGET & HISTORY */}
+                            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                    <h3 className="text-sm font-black text-slate-700 flex items-center gap-2">🎯 Daily Target</h3>
+                                    <button type="button" onClick={openDailyGoalSettings} className="text-[11px] font-bold text-indigo-600 hover:underline">Target: {dailyGoal} words/day · change</button>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+                                        <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Today</div>
+                                        <div className="text-xl font-black text-slate-800 mt-0.5">{todaysActivity.learned} <span className="text-xs font-bold text-slate-400">/ {dailyGoal} words</span></div>
+                                        <div className="h-2 mt-1.5 rounded-full bg-white border border-emerald-200 overflow-hidden">
+                                            <div className={`h-full transition-all duration-500 ${todaysActivity.learned >= dailyGoal ? 'bg-emerald-500' : 'bg-amber-400'}`} style={{ width: `${Math.min(100, (todaysActivity.learned / dailyGoal) * 100)}%` }} />
+                                        </div>
+                                        <div className="text-[10px] font-semibold text-slate-400 mt-1">{todaysActivity.xp} XP today</div>
+                                    </div>
+                                    <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3">
+                                        <div className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">Last 7 days</div>
+                                        <div className="text-xl font-black text-slate-800 mt-0.5">{periodStats.weekLearned} <span className="text-xs font-bold text-slate-400">words</span></div>
+                                        <div className="text-[10px] font-semibold text-slate-400 mt-1">{periodStats.weekXp} XP · goal met {periodStats.week.filter(d => d.learned >= dailyGoal).length}/7 days</div>
+                                    </div>
+                                    <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+                                        <div className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">Last 30 days</div>
+                                        <div className="text-xl font-black text-slate-800 mt-0.5">{periodStats.monthLearned} <span className="text-xs font-bold text-slate-400">words</span></div>
+                                        <div className="text-[10px] font-semibold text-slate-400 mt-1">{periodStats.monthXp} XP · avg {(periodStats.monthLearned / 30).toFixed(1)}/day</div>
+                                    </div>
+                                </div>
+
+                                {/* Last 7 days bars — tap a bar to see that day */}
+                                {(() => {
+                                    const maxVal = Math.max(dailyGoal, ...periodStats.week.map(d => d.learned), 1);
+                                    return (
+                                        <div className="flex items-end gap-2 h-28 pt-2">
+                                            {periodStats.week.map(d => {
+                                                const met = d.learned >= dailyGoal;
+                                                const picked = statsSelectedDate === d.key;
+                                                return (
+                                                    <button key={d.key} type="button" onClick={() => setStatsSelectedDate(d.key)} title={`${d.key}: ${d.learned} words`} className="flex-1 h-full flex flex-col items-center justify-end gap-1 group">
+                                                        <span className="text-[10px] font-bold text-slate-500">{d.learned}</span>
+                                                        <div className="w-full flex-1 flex items-end">
+                                                            <div className={`w-full rounded-t-md transition-all duration-500 ${met ? 'bg-emerald-500' : d.learned > 0 ? 'bg-amber-400' : 'bg-slate-200'} ${picked ? 'ring-2 ring-indigo-500 ring-offset-1' : ''}`} style={{ height: `${Math.max(4, (d.learned / maxVal) * 100)}%` }} />
+                                                        </div>
+                                                        <span className={`text-[10px] font-bold ${picked ? 'text-indigo-600' : 'text-slate-400'}`}>{d.date.toLocaleDateString('en-US', { weekday: 'short' })}</span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    );
+                                })()}
+
+                                {/* Pick any date */}
+                                {(() => {
+                                    const picked = activityLog[statsSelectedDate] || {};
+                                    const learned = picked.learned || 0;
+                                    const xp = picked.xp || 0;
+                                    const pretty = (() => { const [y, m, d] = statsSelectedDate.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }); })();
+                                    return (
+                                        <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                            <label className="flex items-center gap-2 text-xs font-bold text-slate-500">
+                                                📅 Pick a date
+                                                <input type="date" value={statsSelectedDate} max={todayKey()} onChange={(e) => e.target.value && setStatsSelectedDate(e.target.value)} className="px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-700" />
+                                            </label>
+                                            <div className="flex-1 text-xs font-semibold text-slate-600 sm:text-right">
+                                                <span className="text-slate-400">{pretty}:</span> <b className="text-slate-800">{learned} words learned</b> · {xp} XP ·{' '}
+                                                <span className={learned >= dailyGoal ? 'text-emerald-600 font-bold' : 'text-slate-400'}>{learned >= dailyGoal ? '✓ goal met' : `goal ${dailyGoal} not met`}</span>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+
                             {currentStreak === 0 && (
                                 <div className="border border-dashed border-indigo-200 rounded-2xl p-3 text-center text-xs font-semibold text-indigo-500 bg-indigo-50/50">
                                     No active streak yet — mark a word as "Familiar" or earn XP today to light the flame 🔥
@@ -6400,9 +6734,9 @@ Rules:
                                             const isToday = key === todayKey();
                                             const active = activeDateSet.has(key);
                                             return (
-                                                <div key={i} className={`aspect-square rounded-lg flex items-center justify-center text-[11px] font-bold border ${isToday ? 'border-indigo-500 text-indigo-600' : 'border-slate-100 text-slate-500'} ${active ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-slate-50'}`}>
+                                                <button type="button" key={i} onClick={() => setStatsSelectedDate(key)} className={`aspect-square rounded-lg flex items-center justify-center text-[11px] font-bold border ${isToday ? 'border-indigo-500 text-indigo-600' : 'border-slate-100 text-slate-500'} ${active ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-slate-50'} ${statsSelectedDate === key ? 'ring-2 ring-indigo-500 ring-offset-1' : ''} cursor-pointer`}>
                                                     {day}
-                                                </div>
+                                                </button>
                                             );
                                         })}
                                     </div>
@@ -6483,180 +6817,178 @@ Rules:
 
                     {/* MODE 5: MANAGE PAGES, RESTORE TRASH & UNIFIED JSON IMPORT */}
                     {activeTab === 'manage' && (
-                        <div className="space-y-6">
-                            {/* APPEARANCE — theme + the one quick-access toggle that doesn't belong elsewhere */}
-                            <div className={`rounded-2xl border shadow-sm p-6 space-y-4 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
-                                <div>
-                                    <h2 className="text-xl font-extrabold flex items-center gap-2">
-                                        <span>🎨</span> Appearance
-                                    </h2>
-                                    <p className="text-xs mt-0.5 opacity-80">Theme and sound for study and game sessions.</p>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    <div className={`rounded-xl border p-3 ${appTheme === 'light' ? 'bg-slate-50 border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20' : 'bg-slate-800/60 border-slate-700'}`}>
-                                        <div className="text-xs font-bold uppercase tracking-wider opacity-70 mb-2">App Theme</div>
-                                        <div className="flex flex-wrap gap-2">
-                                            {['midnight','light'].map(themeOption => (
-                                                <button key={themeOption} onClick={() => setAppTheme(themeOption)} className={`px-3 py-2 rounded-xl text-xs font-bold capitalize border transition-all ${appTheme === themeOption ? 'bg-indigo-600 text-white border-indigo-500' : appTheme === 'light' ? 'bg-white text-slate-700 border-slate-200' : 'bg-slate-800/70 text-slate-100 border-slate-600'}`}>
-                                                    {themeOption === 'midnight' ? '🌙 Midnight' : themeOption === 'light' ? '☀️ Light' : '🌈 Aurora'}
-                                                </button>
-                                            ))}
-                                        </div>
+                        <div className="space-y-4">
+                            {/* APPEARANCE — one compact row: theme + sound switch */}
+                            <div className={`rounded-2xl border shadow-sm p-4 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'} flex flex-col md:flex-row md:items-center gap-3 md:gap-6`}>
+                                <h2 className="text-lg font-extrabold flex items-center gap-2 shrink-0"><span>🎨</span> Appearance</h2>
+                                <div className="flex flex-wrap items-center gap-3 flex-1 md:justify-end">
+                                    <div className={`inline-flex p-1 rounded-xl border gap-1 ${appTheme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/60 border-slate-700'}`}>
+                                        {['midnight', 'light'].map(themeOption => (
+                                            <button
+                                                key={themeOption}
+                                                type="button"
+                                                onClick={() => setAppTheme(themeOption)}
+                                                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${appTheme === themeOption ? 'bg-indigo-600 text-white shadow' : appTheme === 'light' ? 'text-slate-600 hover:bg-slate-200' : 'text-slate-300 hover:bg-white/10'}`}
+                                            >
+                                                {themeOption === 'midnight' ? '🌙 Midnight' : '☀️ Light'}
+                                            </button>
+                                        ))}
                                     </div>
-                                    <div className={`rounded-xl border p-3 ${appTheme === 'light' ? 'bg-slate-50 border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20' : 'bg-slate-800/60 border-slate-700'}`}>
-                                        <div className="text-xs font-bold uppercase tracking-wider opacity-70 mb-2">Quick Preferences</div>
-                                        <button onClick={() => setGlobalSound(s => !s)} className={`w-full px-3 py-2 rounded-xl text-xs font-bold border transition-all ${globalSound ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : appTheme === 'light' ? 'bg-white text-slate-700 border-slate-200' : 'bg-slate-800/70 text-slate-100 border-slate-600'}`}>
-                                            {globalSound ? '✓ All Sounds ON' : '○ All Sounds OFF'}
-                                        </button>
-                                        <div className="text-[11px] opacity-70 mt-2">Toggle the master sound: when OFF, all gameplay and quiz sounds are muted; when ON, per-area toggles (quiz/game) are allowed but will initially be set ON.</div>
+                                    <div className="w-full sm:w-64" title="Master sound switch: when OFF, all gameplay and quiz sounds are muted.">
+                                        <ToggleRow label="All Sounds" checked={globalSound} onToggle={() => setGlobalSound(v => !v)} appTheme={appTheme} />
                                     </div>
                                 </div>
                             </div>
 
-                            {/* PRONUNCIATION VOICES */}
-                            <div className={`rounded-2xl border shadow-sm p-6 space-y-3 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
-                                <div>
-                                    <h2 className="text-xl font-extrabold flex items-center gap-2">
-                                        <span>🔊</span> Pronunciation Voices
-                                    </h2>
-                                    <p className="text-xs mt-0.5 opacity-80">Lists every English voice your browser exposes (Google, Microsoft, Apple, and others). Pick US/UK male or female when available — Chrome often includes Google US/UK voices while online; Edge adds Microsoft Neural voices.</p>
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                    <div className="space-y-1.5">
-                                        <label className="text-[11px] font-semibold opacity-80">US English ({usVoiceOptions.length} voices)</label>
-                                        <select
-                                            value={voicePrefs.usVoiceURI || ''}
-                                            onChange={(e) => updateVoicePrefs({ usVoiceURI: e.target.value || null })}
-                                            className="w-full px-3 py-2 rounded-xl text-xs font-medium border focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                        >
-                                            <option value="">Auto (best quality match)</option>
-                                            {usVoiceOptions.map(v => (
-                                                <option key={v.voiceURI} value={v.voiceURI}>{SpeechEngine.formatVoiceLabel(v)}</option>
-                                            ))}
-                                        </select>
-                                        <button type="button" onClick={() => speakWord('Hello, this is a test of the US voice.', 'us', triggerToast)} className={`px-2 py-1 rounded-lg text-[10px] font-bold border ${appTheme === 'light' ? 'bg-white border-slate-200' : 'bg-slate-800/70 border-slate-600'}`}>Test US</button>
+                            {/* PRONUNCIATION VOICES — selects and Test buttons share a row */}
+                            <div className={`rounded-2xl border shadow-sm p-4 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'} space-y-2.5`}>
+                                <div className="flex items-start justify-between gap-3 flex-wrap">
+                                    <div>
+                                        <h2 className="text-lg font-extrabold flex items-center gap-2"><span>🔊</span> Pronunciation Voices</h2>
+                                        <p className="text-[11px] mt-0.5 opacity-70">Pick a US/UK voice or leave it on Auto. Chrome adds Google voices while online; Edge adds Microsoft Neural voices.</p>
                                     </div>
-                                    <div className="space-y-1.5">
-                                        <label className="text-[11px] font-semibold opacity-80">UK English ({ukVoiceOptions.length} voices)</label>
-                                        <select
-                                            value={voicePrefs.ukVoiceURI || ''}
-                                            onChange={(e) => updateVoicePrefs({ ukVoiceURI: e.target.value || null })}
-                                            className="w-full px-3 py-2 rounded-xl text-xs font-medium border focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                        >
-                                            <option value="">Auto (best quality match)</option>
-                                            {ukVoiceOptions.map(v => (
-                                                <option key={v.voiceURI} value={v.voiceURI}>{SpeechEngine.formatVoiceLabel(v)}</option>
-                                            ))}
-                                        </select>
-                                        <button type="button" onClick={() => speakWord('Hello, this is a test of the UK voice.', 'uk', triggerToast)} className={`px-2 py-1 rounded-lg text-[10px] font-bold border ${appTheme === 'light' ? 'bg-white border-slate-200' : 'bg-slate-800/70 border-slate-600'}`}>Test UK</button>
+                                    <button type="button" onClick={() => updateVoicePrefs({ usVoiceURI: null, ukVoiceURI: null })} className="text-[11px] font-bold opacity-70 hover:opacity-100 underline shrink-0">Reset both to auto</button>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {[
+                                        { label: 'US', accent: 'us', opts: usVoiceOptions, prefKey: 'usVoiceURI' },
+                                        { label: 'UK', accent: 'uk', opts: ukVoiceOptions, prefKey: 'ukVoiceURI' },
+                                    ].map(v => (
+                                        <div key={v.accent} className="space-y-1">
+                                            <label className="text-[11px] font-semibold opacity-80">{v.label} English ({v.opts.length} voices)</label>
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    value={voicePrefs[v.prefKey] || ''}
+                                                    onChange={(e) => updateVoicePrefs({ [v.prefKey]: e.target.value || null })}
+                                                    className="flex-1 min-w-0 px-3 py-2 rounded-xl text-xs font-medium border focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                >
+                                                    <option value="">Auto (best quality match)</option>
+                                                    {v.opts.map(o => (
+                                                        <option key={o.voiceURI} value={o.voiceURI}>{SpeechEngine.formatVoiceLabel(o)}</option>
+                                                    ))}
+                                                </select>
+                                                <button type="button" onClick={() => speakWord(`Hello, this is a test of the ${v.label} voice.`, v.accent, triggerToast)} className={`px-3 py-2 rounded-xl text-xs font-bold border shrink-0 ${appTheme === 'light' ? 'bg-white border-slate-200 hover:bg-slate-50' : 'bg-slate-800/70 border-slate-600 hover:bg-slate-700'}`}>▶ Test {v.label}</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* DAILY GOAL + CHUNK SIZE — side by side on wide screens */}
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                <div id="daily-goal-card" className={`rounded-2xl border shadow-sm p-4 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'} space-y-3`}>
+                                    <div>
+                                        <h2 className="text-lg font-extrabold flex items-center gap-2"><span>🎯</span> Daily Word Goal</h2>
+                                        <p className="text-[11px] mt-0.5 opacity-70">New words you mark Familiar each day. Shown at the top and tracked in Stats &amp; Streak.</p>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <button type="button" onClick={() => updateDailyGoal(dailyGoal - 1)} disabled={dailyGoal <= MIN_DAILY_GOAL} className="w-8 h-8 shrink-0 rounded-full border border-slate-300 font-extrabold leading-none hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed">−</button>
+                                        <input type="range" min={MIN_DAILY_GOAL} max={MAX_DAILY_GOAL} step="1" value={dailyGoal} onChange={(e) => updateDailyGoal(e.target.value)} className="flex-1 accent-amber-500 cursor-pointer" aria-label="Daily word goal" />
+                                        <button type="button" onClick={() => updateDailyGoal(dailyGoal + 1)} disabled={dailyGoal >= MAX_DAILY_GOAL} className="w-8 h-8 shrink-0 rounded-full border border-slate-300 font-extrabold leading-none hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed">+</button>
+                                        <div className="w-14 shrink-0 text-center">
+                                            <div className="text-2xl font-extrabold leading-none text-amber-500">{dailyGoal}</div>
+                                            <div className="text-[10px] font-bold uppercase tracking-wider opacity-60 mt-0.5">per day</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                        {[5, 10, 15, 20, 30, 50].map(n => (
+                                            <button key={n} type="button" onClick={() => updateDailyGoal(n)} className={`px-2.5 py-1 rounded-full text-xs font-bold border transition-colors ${dailyGoal === n ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-300 hover:bg-slate-100 hover:text-slate-800'}`}>{n}</button>
+                                        ))}
+                                        <span className="text-[11px] opacity-60 ml-1">Today: {todaysActivity.learned}/{dailyGoal}</span>
                                     </div>
                                 </div>
-                                <button type="button" onClick={() => updateVoicePrefs({ usVoiceURI: null, ukVoiceURI: null })} className="text-[11px] font-bold opacity-70 hover:opacity-100 underline">Reset both to auto</button>
+
+                                <div className={`rounded-2xl border shadow-sm p-4 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'} space-y-3`}>
+                                    <div>
+                                        <h2 className="text-lg font-extrabold flex items-center gap-2"><span>🧩</span> Chunk Size</h2>
+                                        <p className="text-[11px] mt-0.5 opacity-70">Words per chunk in the Chunk filter ({MIN_CHUNK_SIZE}–{MAX_CHUNK_SIZE}). Changing it resets the filter to "All Words".</p>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <button type="button" onClick={() => updateChunkSize(chunkSize - 1)} disabled={chunkSize <= MIN_CHUNK_SIZE} className="w-8 h-8 shrink-0 rounded-full border border-slate-300 font-extrabold leading-none hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed">−</button>
+                                        <input type="range" min={MIN_CHUNK_SIZE} max={MAX_CHUNK_SIZE} step="1" value={chunkSize} onChange={(e) => updateChunkSize(e.target.value)} className="flex-1 accent-green-500 cursor-pointer" aria-label="Words per chunk" />
+                                        <button type="button" onClick={() => updateChunkSize(chunkSize + 1)} disabled={chunkSize >= MAX_CHUNK_SIZE} className="w-8 h-8 shrink-0 rounded-full border border-slate-300 font-extrabold leading-none hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed">+</button>
+                                        <div className="w-14 shrink-0 text-center">
+                                            <div className="text-2xl font-extrabold leading-none text-green-600">{chunkSize}</div>
+                                            <div className="text-[10px] font-bold uppercase tracking-wider opacity-60 mt-0.5">words</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                        {[5, 10, 15, 20, 25, 30, 40, 50].map(n => (
+                                            <button key={n} type="button" onClick={() => updateChunkSize(n)} className={`px-2.5 py-1 rounded-full text-xs font-bold border transition-colors ${chunkSize === n ? 'bg-green-500 border-green-500 text-white' : 'border-slate-300 hover:bg-slate-100 hover:text-slate-800'}`}>{n}</button>
+                                        ))}
+                                        <span className="text-[11px] opacity-60 ml-1">{currentWords.length} words → {chunksList.length} chunk{chunksList.length === 1 ? '' : 's'}</span>
+                                    </div>
+                                </div>
                             </div>
 
                             {/* DISPLAY SETTINGS */}
-                            <div className={`rounded-2xl border shadow-sm p-6 space-y-3 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
+                            <div className={`rounded-2xl border shadow-sm p-4 space-y-3 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
                                 <div>
-                                    <h2 className="text-xl font-extrabold flex items-center gap-2">
+                                    <h2 className="text-lg font-extrabold flex items-center gap-2">
                                         <span>👁️</span> Display Settings
                                     </h2>
-                                    <p className="text-xs mt-0.5 opacity-80">What shows on every word card — applies everywhere: Word List, Flashcards, Games, and Practice Quiz. "Word" itself always shows.</p>
+                                    <p className="text-xs mt-0.5 opacity-80">Choose what shows on every word card — applies everywhere: Word List, Flashcards, Games, and Practice Quiz. "Word" itself always shows.</p>
                                 </div>
 
-                                <div className={`rounded-xl border p-3 ${appTheme === 'light' ? 'bg-slate-50 border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20' : 'bg-slate-800/60 border-slate-700'}`}>
-                                    <button onClick={() => setShowBangla(!showBangla)} className={`w-full sm:w-auto px-3 py-2 rounded-xl text-xs font-bold border transition-all mb-1.5 ${showBangla ? 'bg-emerald-600 text-white border-emerald-500' : appTheme === 'light' ? 'bg-white text-slate-700 border-slate-200' : 'bg-slate-800/70 text-slate-100 border-slate-600'}`}>
-                                        {showBangla ? '✓ Bangla Meanings ON (everywhere)' : '○ Bangla Meanings OFF (everywhere)'}
-                                    </button>
-                                    <p className="text-[11px] opacity-60">Master switch for Bangla text across the whole app — quiz options and search included. The "Bangla Meaning" toggles below only control that one field on word cards.</p>
-                                </div>
-
-                                <div className={`rounded-xl border p-3 space-y-4 ${appTheme === 'light' ? 'bg-slate-50 border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20' : 'bg-slate-800/60 border-slate-700'}`}>
-                                    <div>
-                                        <div className="text-[11px] font-bold uppercase tracking-wider opacity-60 mb-1.5">Main Word</div>
-                                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                                            {[
-                                                { key: 'phonetics', label: 'Phonetics' },
-                                                { key: 'meaning_bn', label: 'Bangla Meaning' },
-                                                { key: 'meaning_en', label: 'English Meaning' },
-                                                { key: 'context_main', label: 'Use Context' },
-                                                { key: 'example_main', label: 'Example' },
-                                                { key: 'note', label: 'Note' },
-                                            ].map(({ key, label }) => (
-                                                <button
-                                                    key={key}
-                                                    type="button"
-                                                    onClick={() => toggleFieldVisibility(key)}
-                                                    className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all ${fieldVisibility[key] ? 'bg-indigo-600 text-white border-indigo-500' : appTheme === 'light' ? 'bg-white text-slate-500 border-slate-200' : 'bg-slate-800/70 text-slate-400 border-slate-600'}`}
-                                                >
-                                                    {fieldVisibility[key] ? '✓' : '○'} {label}
-                                                </button>
-                                            ))}
+                                {(() => {
+                                    const panel = appTheme === 'light' ? 'bg-slate-50 border-slate-200' : appTheme === 'aurora' ? 'bg-white/5 border-white/20' : 'bg-slate-800/50 border-slate-700';
+                                    const grid = 'grid grid-cols-1 sm:grid-cols-2 gap-2';
+                                    const Group = ({ title, dot, titleCls, children }) => (
+                                        <div className={`rounded-2xl border p-3.5 space-y-2.5 ${panel}`}>
+                                            <div className={`flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-wider ${titleCls}`}>
+                                                <span className={`w-2.5 h-2.5 rounded-full ${dot}`} />{title}
+                                            </div>
+                                            {children}
                                         </div>
-                                    </div>
+                                    );
+                                    const rowsFor = (prefix, items, enabled) => items.map(({ key, label }) => (
+                                        <ToggleRow key={key} label={label} checked={!!fieldVisibility[key]} onToggle={() => toggleFieldVisibility(key)} disabled={!enabled} appTheme={appTheme} />
+                                    ));
+                                    const mainItems = [
+                                        { key: 'phonetics', label: 'Phonetics' },
+                                        { key: 'meaning_bn', label: 'Bangla Meaning' },
+                                        { key: 'meaning_en', label: 'English Meaning' },
+                                        { key: 'context_main', label: 'Use Context' },
+                                        { key: 'example_main', label: 'Example' },
+                                        { key: 'note', label: 'Note' },
+                                    ];
+                                    const subItems = (p) => [
+                                        { key: `${p}_phonetics`, label: 'Phonetics' },
+                                        { key: `${p}_meaning_bn`, label: 'Bangla Meaning' },
+                                        { key: `${p}_meaning_en`, label: 'English Meaning' },
+                                        { key: `${p}_context`, label: 'Use Context' },
+                                        { key: `${p}_example`, label: 'Example' },
+                                        { key: `${p}_note`, label: 'Note' },
+                                    ];
+                                    return (
+                                        <React.Fragment>
+                                            <ToggleRow
+                                                emphasis
+                                                label="Bangla Meanings (everywhere)"
+                                                hint="Master switch for Bangla text across the whole app — quiz options and search included. The “Bangla Meaning” switches below only control that one field on word cards."
+                                                checked={showBangla}
+                                                onToggle={() => setShowBangla(!showBangla)}
+                                                appTheme={appTheme}
+                                            />
 
-                                    <div>
-                                        <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 mb-1.5">Synonyms</div>
-                                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => toggleFieldVisibility('synonyms')}
-                                                className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all ${fieldVisibility.synonyms ? 'bg-emerald-600 text-white border-emerald-500' : appTheme === 'light' ? 'bg-white text-slate-500 border-slate-200' : 'bg-slate-800/70 text-slate-400 border-slate-600'}`}
-                                            >
-                                                {fieldVisibility.synonyms ? '✓' : '○'} Show Synonyms
-                                            </button>
-                                            {[
-                                                { key: 'synonyms_phonetics', label: 'Phonetics' },
-                                                { key: 'synonyms_meaning_bn', label: 'Bangla Meaning' },
-                                                { key: 'synonyms_meaning_en', label: 'English Meaning' },
-                                                { key: 'synonyms_context', label: 'Use Context' },
-                                                { key: 'synonyms_example', label: 'Example' },
-                                                { key: 'synonyms_note', label: 'Note' },
-                                            ].map(({ key, label }) => (
-                                                <button
-                                                    key={key}
-                                                    type="button"
-                                                    disabled={!fieldVisibility.synonyms}
-                                                    onClick={() => toggleFieldVisibility(key)}
-                                                    className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${fieldVisibility[key] ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : appTheme === 'light' ? 'bg-white text-slate-500 border-slate-200' : 'bg-slate-800/70 text-slate-400 border-slate-600'}`}
-                                                >
-                                                    {fieldVisibility[key] ? '✓' : '○'} {label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
+                                            <Group title="Main Word" dot="bg-indigo-500" titleCls="text-indigo-500">
+                                                <div className={grid}>{rowsFor('main', mainItems, true)}</div>
+                                            </Group>
 
-                                    <div>
-                                        <div className="text-[11px] font-bold uppercase tracking-wider text-rose-600 mb-1.5">Antonyms</div>
-                                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => toggleFieldVisibility('antonyms')}
-                                                className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all ${fieldVisibility.antonyms ? 'bg-rose-600 text-white border-rose-500' : appTheme === 'light' ? 'bg-white text-slate-500 border-slate-200' : 'bg-slate-800/70 text-slate-400 border-slate-600'}`}
-                                            >
-                                                {fieldVisibility.antonyms ? '✓' : '○'} Show Antonyms
-                                            </button>
-                                            {[
-                                                { key: 'antonyms_phonetics', label: 'Phonetics' },
-                                                { key: 'antonyms_meaning_bn', label: 'Bangla Meaning' },
-                                                { key: 'antonyms_meaning_en', label: 'English Meaning' },
-                                                { key: 'antonyms_context', label: 'Use Context' },
-                                                { key: 'antonyms_example', label: 'Example' },
-                                                { key: 'antonyms_note', label: 'Note' },
-                                            ].map(({ key, label }) => (
-                                                <button
-                                                    key={key}
-                                                    type="button"
-                                                    disabled={!fieldVisibility.antonyms}
-                                                    onClick={() => toggleFieldVisibility(key)}
-                                                    className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${fieldVisibility[key] ? 'bg-rose-100 text-rose-700 border-rose-300' : appTheme === 'light' ? 'bg-white text-slate-500 border-slate-200' : 'bg-slate-800/70 text-slate-400 border-slate-600'}`}
-                                                >
-                                                    {fieldVisibility[key] ? '✓' : '○'} {label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-                                    <button type="button" onClick={() => setFieldVisibility(DEFAULT_FIELD_VISIBILITY)} className="text-[11px] font-bold opacity-70 hover:opacity-100 underline">Reset all to shown</button>
-                                </div>
+                                            <Group title="Synonyms" dot="bg-emerald-500" titleCls="text-emerald-600">
+                                                <ToggleRow emphasis label="Show Synonyms" hint="Turn off to hide synonyms everywhere." checked={!!fieldVisibility.synonyms} onToggle={() => toggleFieldVisibility('synonyms')} appTheme={appTheme} />
+                                                <div className={grid}>{rowsFor('synonyms', subItems('synonyms'), !!fieldVisibility.synonyms)}</div>
+                                            </Group>
+
+                                            <Group title="Antonyms" dot="bg-rose-500" titleCls="text-rose-600">
+                                                <ToggleRow emphasis label="Show Antonyms" hint="Turn off to hide antonyms everywhere." checked={!!fieldVisibility.antonyms} onToggle={() => toggleFieldVisibility('antonyms')} appTheme={appTheme} />
+                                                <div className={grid}>{rowsFor('antonyms', subItems('antonyms'), !!fieldVisibility.antonyms)}</div>
+                                            </Group>
+
+                                            <button type="button" onClick={() => setFieldVisibility(DEFAULT_FIELD_VISIBILITY)} className="px-3 py-1.5 rounded-lg border border-slate-300 text-[11px] font-bold opacity-80 hover:opacity-100 hover:bg-slate-100 hover:text-slate-800 transition-all">↺ Reset all to shown</button>
+                                        </React.Fragment>
+                                    );
+                                })()}
                             </div>
 
                             {/* KEYBOARD SHORTCUTS */}
