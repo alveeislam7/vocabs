@@ -11,6 +11,38 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     <!-- Babel for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- FIREBASE (Google Sign-In + Firestore cloud sync).
+         Loaded as a real ES module (Firebase's modern SDK is module-only), then the
+         pieces we need are hung off `window.FB` so the React app below — which runs
+         inside a plain <script type="text/babel"> tag, not a module — can reach them.
+         The React app never assumes this has finished yet: it waits for either
+         `window.FB` to already exist, or the 'fb-ready' event if it hasn't loaded yet. -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js";
+        import {
+            getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+        } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
+        import {
+            getFirestore, doc, getDoc, setDoc
+        } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBJDyyE1hE-hpnjvQ6bdaXt2byKcHCy1G8",
+            authDomain: "vocab-app-7c6dd.firebaseapp.com",
+            projectId: "vocab-app-7c6dd",
+            storageBucket: "vocab-app-7c6dd.firebasestorage.app",
+            messagingSenderId: "1008183025206",
+            appId: "1:1008183025206:web:68f6b2fa74a4e0e54fc297"
+        };
+
+        const fbApp = initializeApp(firebaseConfig);
+        const auth = getAuth(fbApp);
+        const provider = new GoogleAuthProvider();
+        const db = getFirestore(fbApp);
+
+        window.FB = { auth, provider, db, signInWithPopup, signOut, onAuthStateChanged, doc, getDoc, setDoc };
+        window.dispatchEvent(new Event('fb-ready'));
+    </script>
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -3619,6 +3651,128 @@ Rules:
                 localStorage.setItem('wordsmart_user_xp', userXP.toString());
             }, [userXP]);
 
+            // ============================================================
+            // CLOUD SYNC (Firebase Auth + Firestore)
+            // Signing in with Google pulls your saved data in from your own
+            // account (or, the very first time, uploads what's currently in
+            // this browser as the start of that account's cloud data) — so
+            // the same words/progress follow you to any other device or
+            // browser. Everything keeps saving to localStorage exactly as
+            // before too, so the app still works fully offline / signed out.
+            // ============================================================
+            const [cloudUser, setCloudUser] = useState(null);           // Firebase user object, or null when signed out
+            const [cloudAuthReady, setCloudAuthReady] = useState(false); // true once we know for sure whether someone's signed in
+            const [cloudSyncStatus, setCloudSyncStatus] = useState('idle'); // 'idle' | 'loading' | 'saving' | 'saved' | 'error'
+            // true for the brief moment we're writing a just-downloaded cloud
+            // snapshot INTO local state, so the save-effect below knows not to
+            // immediately bounce that same data straight back up to Firestore.
+            const applyingCloudDataRef = useRef(false);
+            // true only once the initial load-or-create for the CURRENTLY signed-in
+            // user has finished — the save-effect refuses to push anything until
+            // then, so a slow network can't let a stale local snapshot race ahead
+            // of the real cloud data and overwrite it.
+            const cloudPulledRef = useRef(false);
+
+            // Wait for the Firebase bootstrap <script type="module"> (in <head>) to
+            // finish, then start listening for sign-in/out state changes.
+            useEffect(() => {
+                let unsubscribe = () => {};
+                const start = () => {
+                    const { auth, onAuthStateChanged } = window.FB;
+                    unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+                        setCloudUser(firebaseUser);
+                        setCloudAuthReady(true);
+                    });
+                };
+                if (window.FB) start();
+                else window.addEventListener('fb-ready', start, { once: true });
+                return () => {
+                    window.removeEventListener('fb-ready', start);
+                    unsubscribe();
+                };
+            }, []);
+
+            // Reset the one-time "have we loaded this user's cloud data yet?"
+            // flag whenever who's signed in changes (sign in, sign out, switch account).
+            useEffect(() => { cloudPulledRef.current = false; }, [cloudUser]);
+
+            const signInWithGoogle = () => {
+                if (!window.FB) return;
+                const { auth, provider, signInWithPopup } = window.FB;
+                signInWithPopup(auth, provider).catch((err) => {
+                    console.error(err);
+                    triggerToast('Sign-in failed — please try again.');
+                });
+            };
+
+            const signOutOfCloud = () => {
+                if (!window.FB) return;
+                const { auth, signOut } = window.FB;
+                signOut(auth).then(() => {
+                    triggerToast("Signed out. This browser's data stays saved here.");
+                });
+            };
+
+            // Once we know someone's signed in: either pull their existing cloud
+            // data down (replacing what's currently shown), or — first-ever
+            // sign-in, no cloud document yet — publish what's currently in this
+            // browser as the starting point for their account.
+            useEffect(() => {
+                if (!cloudAuthReady || !cloudUser || !window.FB) return;
+                const { db, doc, getDoc, setDoc } = window.FB;
+                const ref = doc(db, 'users', cloudUser.uid);
+                setCloudSyncStatus('loading');
+                getDoc(ref).then((snap) => {
+                    if (snap.exists()) {
+                        const cloud = snap.data() || {};
+                        applyingCloudDataRef.current = true;
+                        if (Array.isArray(cloud.books)) setBooks(cloud.books);
+                        if (cloud.allWords && typeof cloud.allWords === 'object') setAllWords(cloud.allWords);
+                        if (cloud.allFamiliarity && typeof cloud.allFamiliarity === 'object') setAllFamiliarity(cloud.allFamiliarity);
+                        if (cloud.allTrash && typeof cloud.allTrash === 'object') setAllTrash(cloud.allTrash);
+                        if (typeof cloud.userXP === 'number') setUserXP(cloud.userXP);
+                        setTimeout(() => { applyingCloudDataRef.current = false; }, 0);
+                        cloudPulledRef.current = true;
+                        setCloudSyncStatus('saved');
+                        triggerToast(`Welcome back${cloudUser.displayName ? ', ' + cloudUser.displayName.split(' ')[0] : ''}! Your cloud data is loaded.`);
+                    } else {
+                        setDoc(ref, { books, allWords, allFamiliarity, allTrash, userXP, updatedAt: Date.now() }).then(() => {
+                            cloudPulledRef.current = true;
+                            setCloudSyncStatus('saved');
+                            triggerToast("Account created — this browser's data is now backed up to your account.");
+                        }).catch((err) => {
+                            console.error(err);
+                            setCloudSyncStatus('error');
+                            triggerToast('Could not set up your cloud account — check your connection.');
+                        });
+                    }
+                }).catch((err) => {
+                    console.error(err);
+                    setCloudSyncStatus('error');
+                    triggerToast('Could not reach the cloud database — check your connection.');
+                });
+                // Intentionally only re-runs when the signed-in user changes, not on
+                // every local data edit (those are handled by the save-effect below).
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [cloudUser, cloudAuthReady]);
+
+            // Push any local change up to Firestore while signed in — debounced so a
+            // flurry of quick edits (e.g. clicking through familiarity levels) collapses
+            // into one write instead of many.
+            useEffect(() => {
+                if (!cloudUser || !window.FB) return;
+                if (!cloudPulledRef.current) return;      // initial load/create hasn't finished yet — don't race it
+                if (applyingCloudDataRef.current) return; // this change just came FROM the cloud — don't bounce it back up
+                const { db, doc, setDoc } = window.FB;
+                setCloudSyncStatus('saving');
+                const handle = setTimeout(() => {
+                    const ref = doc(db, 'users', cloudUser.uid);
+                    setDoc(ref, { books, allWords, allFamiliarity, allTrash, userXP, updatedAt: Date.now() })
+                        .then(() => setCloudSyncStatus('saved'))
+                        .catch((err) => { console.error(err); setCloudSyncStatus('error'); });
+                }, 1500);
+                return () => clearTimeout(handle);
+            }, [books, allWords, allFamiliarity, allTrash, userXP, cloudUser]);
 
             // Helper Toast Trigger
             const triggerToast = (msg) => {
@@ -5525,28 +5679,79 @@ Rules:
                             </div>
                         </div>
 
-                        {/* NAVIGATION TABS */}
-                        <div className="flex flex-wrap gap-2 mt-6 pt-4 border-t border-indigo-500/30">
-                            {[
-                                { id: 'list', label: '📖 Word List', desc: 'Browse & Study' },
-                                { id: 'flashcards', label: '🎴 Flashcards', desc: 'Memorize & Flip' },
-                                { id: 'quiz', label: '🧠 Practice Quiz', desc: 'Test Knowledge' },
-                                { id: 'game', label: '🎮 Word Quest', desc: 'Canvas Arena & Bosses' },
-                                { id: 'stats', label: '📊 Stats & Streak', desc: 'Progress & Activity' },
-                                { id: 'manage', label: '⚙️ Word Manager', desc: 'Pages & Import' }
-                            ].map(tab => (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => setActiveTab(tab.id)}
-                                    className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-xl text-xs font-bold transition-all duration-200 flex flex-col items-center justify-center ${
-                                        activeTab === tab.id
-                                            ? 'keep-white bg-white text-indigo-900 shadow-lg scale-[1.02]'
-                                            : 'bg-indigo-950/40 text-indigo-100 hover:bg-indigo-800/60 border border-indigo-400/20'
-                                    }`}
-                                >
-                                    <span>{tab.label}</span>
-                                </button>
-                            ))}
+                        {/* NAVIGATION TABS + ACCOUNT */}
+                        <div className="flex flex-wrap items-center gap-3 mt-6 pt-4 border-t border-indigo-500/30">
+                            <div className="flex flex-wrap gap-2 flex-1 min-w-0">
+                                {[
+                                    { id: 'list', label: '📖 Word List', desc: 'Browse & Study' },
+                                    { id: 'flashcards', label: '🎴 Flashcards', desc: 'Memorize & Flip' },
+                                    { id: 'quiz', label: '🧠 Practice Quiz', desc: 'Test Knowledge' },
+                                    { id: 'game', label: '🎮 Word Quest', desc: 'Canvas Arena & Bosses' },
+                                    { id: 'stats', label: '📊 Stats & Streak', desc: 'Progress & Activity' },
+                                    { id: 'manage', label: '⚙️ Word Manager', desc: 'Pages & Import' }
+                                ].map(tab => (
+                                    <button
+                                        key={tab.id}
+                                        onClick={() => setActiveTab(tab.id)}
+                                        className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-xl text-xs font-bold transition-all duration-200 flex flex-col items-center justify-center ${
+                                            activeTab === tab.id
+                                                ? 'keep-white bg-white text-indigo-900 shadow-lg scale-[1.02]'
+                                                : 'bg-indigo-950/40 text-indigo-100 hover:bg-indigo-800/60 border border-indigo-400/20'
+                                        }`}
+                                    >
+                                        <span>{tab.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* ACCOUNT / CLOUD SYNC — sign in with Google to back your data up
+                                and carry it to any other device; everything keeps working
+                                locally exactly as before while signed out. */}
+                            <div className="shrink-0">
+                                {!cloudAuthReady ? (
+                                    <div className="px-3 py-1.5 rounded-xl text-[11px] font-bold bg-white/5 text-indigo-200/60 border border-white/10">
+                                        Checking account…
+                                    </div>
+                                ) : cloudUser ? (
+                                    <div className="flex items-center gap-2 bg-white/10 border border-white/20 rounded-xl pl-1.5 pr-2.5 py-1.5">
+                                        {cloudUser.photoURL ? (
+                                            <img src={cloudUser.photoURL} alt="" className="w-6 h-6 rounded-full" referrerPolicy="no-referrer" />
+                                        ) : (
+                                            <span className="w-6 h-6 rounded-full bg-indigo-500 flex items-center justify-center text-[11px] font-bold shrink-0">
+                                                {(cloudUser.displayName || cloudUser.email || '?')[0].toUpperCase()}
+                                            </span>
+                                        )}
+                                        <div className="leading-tight">
+                                            <div className="text-[11px] font-bold truncate max-w-[110px]">{cloudUser.displayName || cloudUser.email}</div>
+                                            <div className="text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1">
+                                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                                    cloudSyncStatus === 'error' ? 'bg-rose-400' :
+                                                    (cloudSyncStatus === 'saving' || cloudSyncStatus === 'loading') ? 'bg-amber-400 animate-pulse' :
+                                                    'bg-emerald-400'
+                                                }`}></span>
+                                                <span className="text-indigo-200/70">
+                                                    {cloudSyncStatus === 'error' ? 'Sync error' : cloudSyncStatus === 'saving' ? 'Saving…' : cloudSyncStatus === 'loading' ? 'Loading…' : 'Synced'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <button type="button" onClick={signOutOfCloud} title="Sign out" className="ml-1 text-indigo-200/70 hover:text-white text-[11px] font-bold">✕</button>
+                                    </div>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={signInWithGoogle}
+                                        className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-white text-indigo-900 hover:bg-indigo-50 shadow-sm transition-all"
+                                    >
+                                        <svg className="w-3.5 h-3.5" viewBox="0 0 48 48">
+                                            <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.7-.4-3.5z"/>
+                                            <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.1 18.9 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6 29.6 4 24 4 16.3 4 9.6 8.3 6.3 14.7z"/>
+                                            <path fill="#4CAF50" d="M24 44c5.5 0 10.4-1.9 14.3-5.1l-6.6-5.6c-2 1.5-4.6 2.4-7.7 2.4-5.2 0-9.6-3.3-11.3-8l-6.6 5.1C9.5 39.6 16.2 44 24 44z"/>
+                                            <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.2 4.3-4.1 5.7l6.6 5.6C40.9 36.5 44 30.8 44 24c0-1.3-.1-2.7-.4-3.5z"/>
+                                        </svg>
+                                        <span>Sign in with Google</span>
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </header>
 
