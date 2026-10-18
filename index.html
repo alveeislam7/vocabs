@@ -2849,6 +2849,110 @@
             return __wsNextWordId;
         };
 
+        // ============================================================
+        // INDEXEDDB STORAGE (for allWords / allFamiliarity / allTrash)
+        // ------------------------------------------------------------
+        // These three are the only pieces of data that can realistically
+        // grow into the many-MB range (hundreds or thousands of words).
+        // localStorage caps out around 5-10MB per site, which a large
+        // vocabulary can exceed — causing silent save failures. IndexedDB
+        // has no such small fixed ceiling (browsers typically allow it to
+        // grow to a meaningful chunk of free disk space), so it's the
+        // storage engine for just these three keys. Everything else in the
+        // app (settings, theme, XP, books list, etc.) is small and stays
+        // in localStorage exactly as before.
+        //
+        // This is a tiny promise-based wrapper around the native IndexedDB
+        // API, storing each of the three datasets as one value under one
+        // key in a single object store — simplest possible shape, easy to
+        // reason about, no need for indexes or multiple stores.
+        // ============================================================
+        const WS_IDB_NAME = 'wordsmart_db';
+        const WS_IDB_VERSION = 1;
+        const WS_IDB_STORE = 'kv';
+
+        function wsIdbOpen() {
+            return new Promise((resolve, reject) => {
+                if (!window.indexedDB) {
+                    reject(new Error('IndexedDB is not available in this browser.'));
+                    return;
+                }
+                const req = indexedDB.open(WS_IDB_NAME, WS_IDB_VERSION);
+                req.onupgradeneeded = () => {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains(WS_IDB_STORE)) {
+                        db.createObjectStore(WS_IDB_STORE);
+                    }
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error || new Error('Failed to open IndexedDB.'));
+            });
+        }
+
+        async function wsIdbGet(key) {
+            const db = await wsIdbOpen();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(WS_IDB_STORE, 'readonly');
+                const store = tx.objectStore(WS_IDB_STORE);
+                const req = store.get(key);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error || new Error(`Failed to read "${key}" from IndexedDB.`));
+            });
+        }
+
+        async function wsIdbSet(key, value) {
+            const db = await wsIdbOpen();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(WS_IDB_STORE, 'readwrite');
+                tx.objectStore(WS_IDB_STORE).put(value, key);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error || new Error(`Failed to write "${key}" to IndexedDB.`));
+            });
+        }
+
+        // Catches any error thrown while rendering the app (anywhere below it)
+        // and shows a visible message + Reload button instead of a blank white
+        // page. React has no built-in recovery from a render-time crash — it
+        // just unmounts the whole tree — so without this, any bug anywhere in
+        // the app (bad import data, a stray undefined, etc.) looks exactly
+        // like "the page is broken" with zero information about why.
+        class AppErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { error: null };
+            }
+            static getDerivedStateFromError(error) {
+                return { error };
+            }
+            componentDidCatch(error, info) {
+                console.error('Vocabulation Companion crashed:', error, info);
+            }
+            render() {
+                if (this.state.error) {
+                    return (
+                        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', background: '#f8fafc', fontFamily: 'sans-serif' }}>
+                            <div style={{ maxWidth: '560px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '16px', padding: '28px', boxShadow: '0 4px 20px rgba(0,0,0,0.06)' }}>
+                                <h1 style={{ fontSize: '18px', fontWeight: 800, color: '#1e293b', margin: '0 0 8px' }}>⚠️ Something went wrong</h1>
+                                <p style={{ fontSize: '13px', color: '#64748b', margin: '0 0 14px', lineHeight: 1.5 }}>
+                                    The app hit an error while rendering, instead of just going blank. Your saved words are safe in this browser's storage — reloading should bring everything back.
+                                </p>
+                                <pre style={{ fontSize: '11px', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px', padding: '10px', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '0 0 16px' }}>
+                                    {String((this.state.error && this.state.error.message) || this.state.error)}
+                                </pre>
+                                <button
+                                    onClick={() => window.location.reload()}
+                                    style={{ background: '#4f46e5', color: '#fff', border: 'none', borderRadius: '10px', padding: '10px 18px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                                >
+                                    🔄 Reload
+                                </button>
+                            </div>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
+
         function App() {
             // BOOKS LIST STATE
             const [books, setBooks] = useState(() => {
@@ -2873,6 +2977,18 @@
                     ws2: savedWS2 ? JSON.parse(savedWS2) : []
                 };
             });
+
+            // Always-current mirror of `allWords`, kept in sync by the effect
+            // below. Import counting (added/updated/promoted) reads and merges
+            // against THIS ref instead of relying on React's setState updater
+            // callback to have already run by the time the summary toast is
+            // built — that timing isn't guaranteed, which was why multi-word
+            // imports could correctly add the words but still report "0 added,
+            // 0 updated". Manually keeping this ref current (both here and
+            // right inside the import function itself) makes the count always
+            // match reality regardless of render timing.
+            const allWordsRef = useRef(allWords);
+            useEffect(() => { allWordsRef.current = allWords; }, [allWords]);
 
             // One-time repair: earlier bulk imports could have created duplicate IDs,
             // which broke filtering/rendering for large word lists. Fix any leftover
@@ -2926,6 +3042,52 @@
                 };
             });
 
+            // Tracks whether the one-time load from IndexedDB (below) has
+            // finished, so the words-data.json auto-fetch (which only runs
+            // for genuinely first-time visitors) waits for it instead of
+            // racing it.
+            const [idbDataChecked, setIdbDataChecked] = useState(false);
+            const idbHadDataRef = useRef(false);
+
+            // LOAD allWords / allFamiliarity / allTrash FROM INDEXEDDB
+            // The three useState() calls above read from localStorage so the
+            // very first paint has something to show immediately (and so
+            // anyone on the old localStorage-only version still sees their
+            // data). Right after mount, this effect checks IndexedDB — the
+            // real, larger-capacity home for this data — and if it already
+            // has a saved copy (from a previous session on this same
+            // updated app), that copy wins, since it's the most complete
+            // one. If IndexedDB is empty (first run of this update), nothing
+            // changes here — the localStorage-sourced state above is kept,
+            // and the save effect further down migrates it into IndexedDB.
+            useEffect(() => {
+                let cancelled = false;
+                (async () => {
+                    try {
+                        const [idbWords, idbFam, idbTrash] = await Promise.all([
+                            wsIdbGet('allWords'),
+                            wsIdbGet('allFamiliarity'),
+                            wsIdbGet('allTrash'),
+                        ]);
+                        if (cancelled) return;
+                        if (idbWords && typeof idbWords === 'object') {
+                            setAllWords(idbWords);
+                            idbHadDataRef.current = true;
+                        }
+                        if (idbFam && typeof idbFam === 'object') setAllFamiliarity(idbFam);
+                        if (idbTrash && typeof idbTrash === 'object') setAllTrash(idbTrash);
+                    } catch (e) {
+                        // IndexedDB unavailable (private browsing in some
+                        // browsers, very old browsers, etc.) — fall back to
+                        // whatever was already loaded from localStorage above.
+                        console.error('Could not read saved words from IndexedDB; using localStorage data instead.', e);
+                    } finally {
+                        if (!cancelled) setIdbDataChecked(true);
+                    }
+                })();
+                return () => { cancelled = true; };
+            }, []);
+
             // AUTO-FETCH PUBLISHED DEFAULT DATA (words-data.json)
             // First-time visitors — anyone whose browser has NO saved
             // Vocabulation data yet — automatically pull whichever books/words
@@ -2943,7 +3105,14 @@
             // to index.html and commit. No further code changes ever needed —
             // just repeat this whenever you add more words or pages.
             useEffect(() => {
-                const hasLocalData = localStorage.getItem('wordsmart_all_words_map')
+                // Wait for the IndexedDB check above to finish, since on a
+                // returning visitor the words may live ONLY in IndexedDB
+                // (localStorage's copy gets cleared once it's migrated) —
+                // checking localStorage alone would wrongly look empty.
+                if (!idbDataChecked) return;
+
+                const hasLocalData = idbHadDataRef.current
+                    || localStorage.getItem('wordsmart_all_words_map')
                     || localStorage.getItem('wordsmart_custom_books_list')
                     || localStorage.getItem('wordsmart_data_ws1')
                     || localStorage.getItem('wordsmart_data_ws2');
@@ -2973,7 +3142,7 @@
                         // file:// open where fetch can't work) — silently keep
                         // the built-in defaults already loaded above.
                     });
-            }, []);
+            }, [idbDataChecked]);
 
             // BANGLA TOGGLE SWITCH
             const [showBangla, setShowBangla] = useState(() => {
@@ -3669,8 +3838,14 @@ Rules:
                     let addedCount = 0;
                     let promotedCount = 0;
 
-                    setAllWords(prev => {
+                    // Computed synchronously against the always-current allWordsRef
+                    // (instead of inside a setAllWords(prev => ...) updater) so the
+                    // added/updated counts used in the toast below are guaranteed to
+                    // reflect what just happened, regardless of exactly when React
+                    // gets around to applying the state update.
+                    {
                         const bookId = activeBook.id;
+                        const prev = allWordsRef.current || {};
                         const existingWords = prev[bookId] || [];
                         const map = new Map(existingWords.map(item => [normalizeText(item.word), { ...item }]));
                         const allRelatedEntries = [];
@@ -3741,8 +3916,14 @@ Rules:
                         const promoted = promoteRelatedWords(Array.from(map.values()), allRelatedEntries);
                         promotedCount = promoted.promotedCount;
 
-                        return { ...prev, [bookId]: promoted.words };
-                    });
+                        const nextAllWords = { ...prev, [bookId]: promoted.words };
+                        // Update the ref immediately (synchronously), before React has
+                        // necessarily re-rendered, so a second import fired right after
+                        // this one (e.g. the next file in a multi-file selection) merges
+                        // against this result instead of stale data.
+                        allWordsRef.current = nextAllWords;
+                        setAllWords(nextAllWords);
+                    }
 
                     addXP((addedCount * 10) + (updatedCount * 5) + (promotedCount * 5));
                     bumpImportRefresh();
@@ -3799,17 +3980,81 @@ Rules:
                 localStorage.setItem('wordsmart_active_book_id', selectedBookId);
             }, [selectedBookId]);
 
+            // These three datasets (the ones that can actually grow large)
+            // now save to IndexedDB instead of localStorage, since IndexedDB
+            // doesn't have localStorage's small ~5-10MB-per-site ceiling. Each
+            // effect also does a one-time cleanup of the old, now-unused
+            // localStorage copy once the IndexedDB save succeeds, so that
+            // migrated data doesn't sit around taking up localStorage quota
+            // that other (small) settings still rely on. If IndexedDB itself
+            // is unavailable for some reason, each effect falls back to the
+            // previous localStorage-with-guard behavior, so saving still
+            // works (down to the same ~5-10MB ceiling) rather than silently
+            // doing nothing. Each effect also waits for the one-time
+            // IndexedDB read (above) to finish first — otherwise, on a
+            // returning visitor, this could fire once with the small
+            // leftover localStorage default BEFORE the real (larger) data
+            // has been loaded back in, briefly overwriting the good copy.
             useEffect(() => {
-                localStorage.setItem('wordsmart_all_words_map', JSON.stringify(allWords));
-            }, [allWords]);
+                if (!idbDataChecked) return;
+                let cancelled = false;
+                wsIdbSet('allWords', allWords)
+                    .then(() => {
+                        if (cancelled) return;
+                        try { localStorage.removeItem('wordsmart_all_words_map'); } catch (e) { /* ignore */ }
+                    })
+                    .catch((e) => {
+                        if (cancelled) return;
+                        console.error('Could not save words to IndexedDB, falling back to localStorage:', e);
+                        try {
+                            localStorage.setItem('wordsmart_all_words_map', JSON.stringify(allWords));
+                        } catch (e2) {
+                            console.error('Could not save words to localStorage either:', e2);
+                            triggerToast("⚠️ Couldn't save — your word list may be too large for browser storage. Export a backup now so nothing is lost!");
+                        }
+                    });
+                return () => { cancelled = true; };
+            }, [allWords, idbDataChecked]);
 
             useEffect(() => {
-                localStorage.setItem('wordsmart_all_familiarity_map', JSON.stringify(allFamiliarity));
-            }, [allFamiliarity]);
+                if (!idbDataChecked) return;
+                let cancelled = false;
+                wsIdbSet('allFamiliarity', allFamiliarity)
+                    .then(() => {
+                        if (cancelled) return;
+                        try { localStorage.removeItem('wordsmart_all_familiarity_map'); } catch (e) { /* ignore */ }
+                    })
+                    .catch((e) => {
+                        if (cancelled) return;
+                        console.error('Could not save familiarity data to IndexedDB, falling back to localStorage:', e);
+                        try {
+                            localStorage.setItem('wordsmart_all_familiarity_map', JSON.stringify(allFamiliarity));
+                        } catch (e2) {
+                            console.error('Could not save familiarity data to localStorage either:', e2);
+                        }
+                    });
+                return () => { cancelled = true; };
+            }, [allFamiliarity, idbDataChecked]);
 
             useEffect(() => {
-                localStorage.setItem('wordsmart_all_trash_map', JSON.stringify(allTrash));
-            }, [allTrash]);
+                if (!idbDataChecked) return;
+                let cancelled = false;
+                wsIdbSet('allTrash', allTrash)
+                    .then(() => {
+                        if (cancelled) return;
+                        try { localStorage.removeItem('wordsmart_all_trash_map'); } catch (e) { /* ignore */ }
+                    })
+                    .catch((e) => {
+                        if (cancelled) return;
+                        console.error('Could not save trash data to IndexedDB, falling back to localStorage:', e);
+                        try {
+                            localStorage.setItem('wordsmart_all_trash_map', JSON.stringify(allTrash));
+                        } catch (e2) {
+                            console.error('Could not save trash data to localStorage either:', e2);
+                        }
+                    });
+                return () => { cancelled = true; };
+            }, [allTrash, idbDataChecked]);
 
             useEffect(() => {
                 localStorage.setItem('wordsmart_show_bangla', JSON.stringify(showBangla));
@@ -8119,7 +8364,7 @@ Rules:
             );
         }
 
-        ReactDOM.render(<App />, document.getElementById('root'));
+        ReactDOM.render(<AppErrorBoundary><App /></AppErrorBoundary>, document.getElementById('root'));
     </script>
 </body>
 </html>
