@@ -3406,8 +3406,12 @@
         function MpWordPicker({ books, allWords, defaultBookId, wordCount, picks, setPicks, locked }) {
             const [bookId, setBookId] = useState(defaultBookId || (books[0] && books[0].id));
             const [search, setSearch] = useState('');
+            const [openId, setOpenId] = useState(null);
             const list = (allWords[bookId] || []);
             const keyOf = (w) => String(w.word || '').trim().toLowerCase();
+            const relatedNames = (rel) => (Array.isArray(rel) ? rel : [])
+                .map(x => (typeof x === 'string' ? x : (x && (x.word || x.text)) || ''))
+                .map(x => String(x).trim()).filter(Boolean).slice(0, 3);
             const picked = new Set(picks.map(p => p.w.toLowerCase()));
             const q = search.trim().toLowerCase();
             const shown = list.filter(w => w.word && (!q || String(w.word).toLowerCase().includes(q))).slice(0, 80);
@@ -3439,12 +3443,32 @@
                         {shown.length === 0 && <div className="p-4 text-xs text-slate-400 text-center">No words here.</div>}
                         {shown.map((w, i) => {
                             const on = picked.has(keyOf(w));
+                            const isOpen = openId === (w.id || i);
+                            const syn = relatedNames(w.synonyms);
+                            const ant = relatedNames(w.antonyms);
+                            const meaning = w.meaning_en || w.meaning || '';
                             return (
-                                <button key={`${w.id}-${i}`} onClick={() => toggle(w)} disabled={locked || (!on && picks.length >= wordCount)} className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${on ? 'bg-indigo-50' : 'hover:bg-slate-50'} disabled:opacity-60`}>
-                                    <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] font-black ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'}`}>{on ? '✓' : ''}</span>
-                                    <span className="font-extrabold text-slate-800">{w.word}</span>
-                                    <span className="text-slate-400 truncate">{w.meaning_en || w.meaning || ''}</span>
-                                </button>
+                                <div key={`${w.id}-${i}`} className={on ? 'bg-indigo-50' : ''}>
+                                    <div className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${!on ? 'hover:bg-slate-50' : ''}`}>
+                                        <button type="button" onClick={() => toggle(w)} disabled={locked || (!on && picks.length >= wordCount)} className="flex items-center gap-2 flex-1 min-w-0 text-left disabled:opacity-60">
+                                            <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] font-black shrink-0 ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'}`}>{on ? '✓' : ''}</span>
+                                            <span className="font-extrabold text-slate-800 shrink-0">{w.word}</span>
+                                            <span className="text-slate-400 truncate">{meaning}</span>
+                                        </button>
+                                        <button type="button" onClick={() => setOpenId(isOpen ? null : (w.id || i))} className="shrink-0 text-slate-400 hover:text-indigo-600 text-[11px] font-bold px-1.5 py-0.5" title="Show full detail">
+                                            {isOpen ? '▲' : '▾'}
+                                        </button>
+                                    </div>
+                                    {isOpen && (
+                                        <div className="px-3 pb-2.5 -mt-0.5 text-[11px] space-y-1">
+                                            {w.meaning_bn && <div className="font-semibold text-indigo-700">{w.meaning_bn}</div>}
+                                            {meaning && <div className="text-slate-600">{meaning}</div>}
+                                            {w.example_main && <div className="italic text-slate-400">“{w.example_main}”</div>}
+                                            {syn.length > 0 && <div className="text-emerald-700"><b>Synonyms:</b> {syn.join(', ')}</div>}
+                                            {ant.length > 0 && <div className="text-rose-600"><b>Antonyms:</b> {ant.join(', ')}</div>}
+                                        </div>
+                                    )}
+                                </div>
                             );
                         })}
                     </div>
@@ -3464,8 +3488,13 @@
             return out;
         }
 
-        // Picker for rooms that have a chunk: choose only from the chunk's (already slim) words
+        // Picker for rooms that have a chunk: choose only from the chunk's (already slim) words.
+        // Tapping the row toggles the pick; a separate ▾ button expands full detail
+        // (meaning, example, synonyms, antonyms) in place — picking a word here never
+        // means YOU get tested on it (you're choosing it for the other person's exam),
+        // so showing everything up front is safe and just helps you pick good words.
         function MpChunkPicker({ chunk, wordCount, picks, setPicks, locked }) {
+            const [openWord, setOpenWord] = useState(null);
             const picked = new Set(picks.map(p => p.w.toLowerCase()));
             const toggle = (w) => {
                 if (locked) return;
@@ -3481,19 +3510,38 @@
             return (
                 <div className="space-y-2">
                     <div className="flex gap-2 flex-wrap items-center">
-                        <span className="text-[11px] font-bold text-slate-400 mr-auto">Tap words from the chunk</span>
+                        <span className="text-[11px] font-bold text-slate-400 mr-auto">Tap a word to pick it · ▾ to see full detail</span>
                         <button onClick={randomFill} disabled={locked || picks.length >= wordCount} className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold hover:bg-amber-200 disabled:opacity-40">🎲 Fill randomly</button>
                         <button onClick={() => setPicks([])} disabled={locked || !picks.length} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 disabled:opacity-40">Clear</button>
                     </div>
                     <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
                         {chunk.map((w, i) => {
                             const on = picked.has(w.w.toLowerCase());
+                            const isOpen = openWord === w.w;
+                            const syn = Object.values(w.s || {}).filter(Boolean);
+                            const ant = Object.values(w.a || {}).filter(Boolean);
                             return (
-                                <button key={i} onClick={() => toggle(w)} disabled={locked || (!on && picks.length >= wordCount)} className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs ${on ? 'bg-indigo-50' : 'hover:bg-slate-50'} disabled:opacity-50`}>
-                                    <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] font-black shrink-0 ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'}`}>{on ? '✓' : ''}</span>
-                                    <span className="font-extrabold text-slate-800">{w.w}</span>
-                                    <span className="text-slate-400 truncate">{w.m || ''}</span>
-                                </button>
+                                <div key={i} className={on ? 'bg-indigo-50' : ''}>
+                                    <div className={`w-full flex items-center gap-2 px-3 py-2 text-xs ${!on ? 'hover:bg-slate-50' : ''}`}>
+                                        <button type="button" onClick={() => toggle(w)} disabled={locked || (!on && picks.length >= wordCount)} className="flex items-center gap-2 flex-1 min-w-0 text-left disabled:opacity-50">
+                                            <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] font-black shrink-0 ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'}`}>{on ? '✓' : ''}</span>
+                                            <span className="font-extrabold text-slate-800 shrink-0">{w.w}</span>
+                                            <span className="text-slate-400 truncate">{w.m || ''}</span>
+                                        </button>
+                                        <button type="button" onClick={() => setOpenWord(isOpen ? null : w.w)} className="shrink-0 text-slate-400 hover:text-indigo-600 text-[11px] font-bold px-1.5 py-0.5" title="Show full detail">
+                                            {isOpen ? '▲' : '▾'}
+                                        </button>
+                                    </div>
+                                    {isOpen && (
+                                        <div className="px-3 pb-2.5 -mt-0.5 text-[11px] space-y-1">
+                                            {w.b && <div className="font-semibold text-indigo-700">{w.b}</div>}
+                                            {w.m && <div className="text-slate-600">{w.m}</div>}
+                                            {w.e && <div className="italic text-slate-400">“{w.e}”</div>}
+                                            {syn.length > 0 && <div className="text-emerald-700"><b>Synonyms:</b> {syn.join(', ')}</div>}
+                                            {ant.length > 0 && <div className="text-rose-600"><b>Antonyms:</b> {ant.join(', ')}</div>}
+                                        </div>
+                                    )}
+                                </div>
                             );
                         })}
                     </div>
@@ -3556,23 +3604,34 @@
                                 <h3 className="text-sm font-black text-slate-800 mr-auto">The chunk ({chunk.length} words)</h3>
                                 <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs w-32" />
                             </div>
-                            <div className="max-h-[28rem] overflow-y-auto space-y-1.5 pr-1">
-                                {shown.map((w, i) => (
-                                    <div key={i} className="rounded-xl border border-slate-200 bg-slate-50">
-                                        <button onClick={() => setOpen(open === w.w ? null : w.w)} className="w-full text-left px-3 py-2">
-                                            <div className="flex items-center gap-2"><span className="text-sm font-extrabold text-slate-800">{w.w}</span><span className="text-[11px] text-slate-400 truncate">{w.m}</span></div>
-                                        </button>
-                                        {open === w.w && (
-                                            <div className="px-3 pb-3 text-xs space-y-1 border-t border-slate-200 pt-2">
-                                                {w.b && <div className="font-semibold text-emerald-700">{w.b}</div>}
-                                                {w.m && <div className="text-slate-600">{w.m}</div>}
-                                                {w.e && <div className="italic text-slate-400">“{w.e}”</div>}
-                                                {(w.s && Object.values(w.s).length > 0) && <div className="text-emerald-700"><b>Synonyms:</b> {Object.values(w.s).join(', ')}</div>}
-                                                {(w.a && Object.values(w.a).length > 0) && <div className="text-rose-600"><b>Antonyms:</b> {Object.values(w.a).join(', ')}</div>}
+                            <div className="max-h-[28rem] overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
+                                {shown.map((w, i) => {
+                                    const isOpen = open === w.w;
+                                    const syn = Object.values(w.s || {}).filter(Boolean);
+                                    const ant = Object.values(w.a || {}).filter(Boolean);
+                                    return (
+                                        <div key={i}>
+                                            <div className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-slate-50">
+                                                <button type="button" onClick={() => setOpen(isOpen ? null : w.w)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                                                    <span className="font-extrabold text-slate-800 shrink-0">{w.w}</span>
+                                                    <span className="text-slate-400 truncate">{w.m}</span>
+                                                </button>
+                                                <button type="button" onClick={() => setOpen(isOpen ? null : w.w)} className="shrink-0 text-slate-400 hover:text-indigo-600 text-[11px] font-bold px-1.5 py-0.5" title="Show full detail">
+                                                    {isOpen ? '▲' : '▾'}
+                                                </button>
                                             </div>
-                                        )}
-                                    </div>
-                                ))}
+                                            {isOpen && (
+                                                <div className="px-3 pb-2.5 -mt-0.5 text-[11px] space-y-1">
+                                                    {w.b && <div className="font-semibold text-indigo-700">{w.b}</div>}
+                                                    {w.m && <div className="text-slate-600">{w.m}</div>}
+                                                    {w.e && <div className="italic text-slate-400">“{w.e}”</div>}
+                                                    {syn.length > 0 && <div className="text-emerald-700"><b>Synonyms:</b> {syn.join(', ')}</div>}
+                                                    {ant.length > 0 && <div className="text-rose-600"><b>Antonyms:</b> {ant.join(', ')}</div>}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </div>
                         {canPick && (
@@ -5852,6 +5911,75 @@ Rules:
                 if (nickname) localStorage.setItem('wordsmart_nickname', nickname);
                 else localStorage.removeItem('wordsmart_nickname');
             }, [nickname]);
+
+            // ============================================================
+            // GLOBAL NOTIFICATIONS (🔔 bell in the header) — lightweight,
+            // read-only listeners so pokes / room invites / challenges-needing-
+            // attention show up no matter which tab you're on, not just while
+            // the Multiplayer tab happens to be mounted. These are separate
+            // from MultiplayerArena's own listeners (which still handle the
+            // interactive poke-toast and the invites list exactly as before);
+            // this just powers the badge count + a small dropdown. Dismissing
+            // an invite or a poke from here is a plain RTDB write — the same
+            // one MultiplayerArena itself does — so nothing stays double-counted.
+            // ============================================================
+            const [notifFbReady, setNotifFbReady] = useState(!!window.FB);
+            useEffect(() => {
+                if (window.FB) { setNotifFbReady(true); return; }
+                const h = () => setNotifFbReady(true);
+                window.addEventListener('fb-ready', h, { once: true });
+                return () => window.removeEventListener('fb-ready', h);
+            }, []);
+            const [showNotifPanel, setShowNotifPanel] = useState(false);
+            const [notifInvites, setNotifInvites] = useState({});
+            const [notifPokes, setNotifPokes] = useState({});
+            const [notifChallengeIds, setNotifChallengeIds] = useState([]);
+            const [notifChallengeMap, setNotifChallengeMap] = useState({});
+            useEffect(() => {
+                if (!notifFbReady || !window.FB || !window.FB.rtdb || !cloudUser) {
+                    setNotifInvites({}); setNotifPokes({}); setNotifChallengeIds([]); setNotifChallengeMap({});
+                    return;
+                }
+                const F = window.FB;
+                const uid = cloudUser.uid;
+                const u1 = F.dbOnValue(F.dbRef(F.rtdb, `invites/${uid}`), (snap) => setNotifInvites(snap.val() || {}), () => {});
+                const u2 = F.dbOnValue(F.dbRef(F.rtdb, `pokes/${uid}`), (snap) => setNotifPokes(snap.val() || {}), () => {});
+                const u3 = F.dbOnValue(F.dbRef(F.rtdb, `userChallenges/${uid}`), (snap) => setNotifChallengeIds(Object.keys(snap.val() || {})), () => {});
+                return () => { u1(); u2(); u3(); };
+            }, [notifFbReady, cloudUser && cloudUser.uid]);
+            // One small listener per challenge id I'm part of, so the badge
+            // can tell "waiting on them" apart from "it's your move".
+            useEffect(() => {
+                if (!notifFbReady || !window.FB || !window.FB.rtdb || !cloudUser || !notifChallengeIds.length) {
+                    setNotifChallengeMap({});
+                    return;
+                }
+                const F = window.FB;
+                const unsubs = notifChallengeIds.map(id => F.dbOnValue(F.dbRef(F.rtdb, `challenges/${id}`), (snap) => {
+                    setNotifChallengeMap(prev => ({ ...prev, [id]: snap.val() }));
+                }, () => {}));
+                return () => unsubs.forEach(u => u());
+            }, [notifFbReady, cloudUser && cloudUser.uid, notifChallengeIds.join(',')]);
+            // A challenge needs your attention when: you haven't finished your
+            // exam yet, OR you're the sender and the other person has picked
+            // your words back (so your exam is now actually takeable), OR both
+            // sides are done and the result is sitting there to be viewed
+            // (clearing it, via the existing Challenges tab, removes it from
+            // this count for good — no extra "seen" tracking needed).
+            const notifActionableChallengeCount = useMemo(() => {
+                if (!cloudUser) return 0;
+                const uid = cloudUser.uid;
+                let n = 0;
+                Object.values(notifChallengeMap).forEach((c) => {
+                    if (!c) return;
+                    if (c.to === uid && !c.toDone) n++;
+                    else if (c.from === uid && !c.fromDone && Object.keys(c.wordsForFrom || {}).length > 0) n++;
+                    else if (c.fromDone && c.toDone) n++;
+                });
+                return n;
+            }, [notifChallengeMap, cloudUser]);
+            const notifTotalCount = Object.keys(notifInvites).length + Object.keys(notifPokes).length + notifActionableChallengeCount;
+
             // What to actually display as "the user's name" anywhere in the app.
             const displayName = nickname.trim() || cloudUser?.displayName || (cloudUser?.email ? cloudUser.email.split('@')[0] : 'Guest');
             // true for the brief moment we're writing a just-downloaded cloud
@@ -8321,6 +8449,83 @@ Rules:
                                     </button>
                                 ))}
                             </div>
+
+                            {/* NOTIFICATIONS BELL — pokes, room invites, and challenges needing
+                                your attention, visible from anywhere, not just the Multiplayer
+                                tab. "Open" routes you to the Multiplayer tab where the full,
+                                interactive UI for that item already lives; dismissing a poke or
+                                declining an invite happens right here. */}
+                            {cloudUser && (
+                                <div className="relative shrink-0">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowNotifPanel(p => !p)}
+                                        className="relative w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 flex items-center justify-center text-base transition-colors"
+                                        title="Notifications"
+                                    >
+                                        🔔
+                                        {notifTotalCount > 0 && (
+                                            <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-black flex items-center justify-center">
+                                                {notifTotalCount > 9 ? '9+' : notifTotalCount}
+                                            </span>
+                                        )}
+                                    </button>
+                                    {showNotifPanel && (
+                                        <React.Fragment>
+                                            <div className="fixed inset-0 z-40" onClick={() => setShowNotifPanel(false)} />
+                                            <div className="absolute right-0 top-11 z-50 w-80 max-w-[90vw] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+                                                <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                                                    <span className="text-sm font-black text-slate-800">Notifications</span>
+                                                    {notifTotalCount === 0 && <span className="text-[11px] text-slate-400">All caught up</span>}
+                                                </div>
+                                                <div className="max-h-96 overflow-y-auto divide-y divide-slate-100">
+                                                    {Object.entries(notifInvites).map(([fromUid, inv]) => (
+                                                        <div key={`inv-${fromUid}`} className="px-4 py-3 flex items-center gap-3">
+                                                            {inv.photo ? (
+                                                                <img src={inv.photo} alt="" className="w-8 h-8 rounded-full shrink-0" referrerPolicy="no-referrer" />
+                                                            ) : (
+                                                                <span className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-bold shrink-0">{(inv.from || '?')[0].toUpperCase()}</span>
+                                                            )}
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-xs font-bold text-slate-800 truncate">{inv.from} invited you to a room</div>
+                                                                <div className="flex gap-2 mt-1.5">
+                                                                    <button type="button" onClick={() => { setActiveTab('multi'); setShowNotifPanel(false); }} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold hover:bg-indigo-700">Open</button>
+                                                                    <button type="button" onClick={() => { const F = window.FB; if (F && F.rtdb) F.dbRemove(F.dbRef(F.rtdb, `invites/${cloudUser.uid}/${fromUid}`)).catch(() => {}); }} className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-bold hover:bg-slate-200">Dismiss</button>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                    {Object.entries(notifPokes).map(([fromUid, pk]) => (
+                                                        <div key={`poke-${fromUid}`} className="px-4 py-3 flex items-center gap-3">
+                                                            {pk.photo ? (
+                                                                <img src={pk.photo} alt="" className="w-8 h-8 rounded-full shrink-0" referrerPolicy="no-referrer" />
+                                                            ) : (
+                                                                <span className="w-8 h-8 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center text-xs font-bold shrink-0">{(pk.from || '?')[0].toUpperCase()}</span>
+                                                            )}
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-xs font-bold text-slate-800 truncate">👋 {pk.from} poked you</div>
+                                                                <button type="button" onClick={() => { const F = window.FB; if (F && F.rtdb) F.dbRemove(F.dbRef(F.rtdb, `pokes/${cloudUser.uid}/${fromUid}`)).catch(() => {}); }} className="mt-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-bold hover:bg-slate-200">Got it</button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                    {notifActionableChallengeCount > 0 && (
+                                                        <div className="px-4 py-3 flex items-center gap-3">
+                                                            <span className="w-8 h-8 rounded-full bg-violet-100 text-violet-700 flex items-center justify-center text-sm shrink-0">⚔️</span>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-xs font-bold text-slate-800">{notifActionableChallengeCount} challenge{notifActionableChallengeCount > 1 ? 's' : ''} need{notifActionableChallengeCount === 1 ? 's' : ''} your attention</div>
+                                                                <button type="button" onClick={() => { setActiveTab('multi'); setShowNotifPanel(false); }} className="mt-1.5 px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold hover:bg-indigo-700">Open Challenges</button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {notifTotalCount === 0 && (
+                                                        <div className="px-4 py-6 text-center text-xs text-slate-400">Nothing new right now.</div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </React.Fragment>
+                                    )}
+                                </div>
+                            )}
 
                             {/* ACCOUNT / CLOUD SYNC — sign in with Google to back your data up
                                 and carry it to any other device; everything keeps working
