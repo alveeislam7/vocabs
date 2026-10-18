@@ -1784,6 +1784,9 @@
 
             // True / False
             const [tfQuestion, setTfQuestion] = useState(null);
+            // REVERSE: show the meaning, pick the word (Classic Battle + Speed Round).
+            const [reverseMode, setReverseMode] = useState(() => localStorage.getItem('wordsmart_wq_reverse') === '1');
+            useEffect(() => { try { localStorage.setItem('wordsmart_wq_reverse', reverseMode ? '1' : '0'); } catch (e) {} }, [reverseMode]);
 
             // Synonym / Antonym game (replaces the old Word Scramble)
             const [synAntQuestion, setSynAntQuestion] = useState(null);
@@ -1958,11 +1961,14 @@
                 const target = p[Math.floor(Math.random() * p.length)];
                 const isTrue = Math.random() > 0.45;
                 let shownMeaning = target.meaning_en || target.meaning;
-                if (!isTrue) {
-                    const other = p.filter(w => w.id !== target.id).sort(() => 0.5 - Math.random())[0];
+                let shownWord = null; // set only in Reverse mode: the meaning is fixed and the WORD shown may be wrong
+                const other = isTrue ? null : p.filter(w => w.id !== target.id).sort(() => 0.5 - Math.random())[0];
+                if (reverseMode) {
+                    shownWord = isTrue ? target.word : ((other && other.word) || target.word);
+                } else if (!isTrue) {
                     shownMeaning = (other && (other.meaning_en || other.meaning)) || shownMeaning;
                 }
-                setTfQuestion({ target, shownMeaning, isTrue });
+                setTfQuestion({ target, shownMeaning, shownWord, isTrue });
                 setSelectedAnswer(null); setFeedbackType(null); setRevealWord(false);
                 if (pushHistory) setTimeout(() => pushNav(makeSnapshot()), 0);
             };
@@ -2469,6 +2475,12 @@
                         )
                     )}
 
+                    {!isImmersive && (
+                        <label className={`flex items-center justify-between gap-3 rounded-xl px-4 py-2.5 border cursor-pointer ${appTheme === 'light' ? 'bg-white border-slate-200' : 'bg-white/5 border-white/15'}`}>
+                            <span className={`text-xs font-bold ${appTheme === 'light' ? 'text-slate-700' : 'text-white/80'}`}>🔁 Reverse mode <span className="font-medium opacity-70">— see the meaning, pick the word (Classic, Speed &amp; True/False)</span></span>
+                            <input type="checkbox" checked={reverseMode} onChange={(e) => setReverseMode(e.target.checked)} className="w-4 h-4 shrink-0" />
+                        </label>
+                    )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                         {[
                             { mode:'classic', icon:'⚔️', title:'Classic Battle', desc:'Answer 10 questions with 5 lives. Combo for bonus XP!', color:'from-indigo-500 to-blue-700' },
@@ -2670,13 +2682,25 @@
                         <div className={`space-y-4 answer-card-container relative ${slideCls}`} key={`tf-${nav.idx}`}>
                             <div className="bg-gradient-to-br from-slate-600 to-slate-800 rounded-2xl p-6 text-white text-center space-y-3 shadow-xl">
                                 <div className="text-xs font-bold text-slate-200 uppercase tracking-wider">True or False?</div>
-                                <h2 className="text-3xl font-black">{tfQuestion.target.word}</h2>
-                                <div className="flex justify-center">
-                                    <SpeakPair text={tfQuestion.target.word} notify={triggerToast} accent={speechAccent} variant="onDark" primaryAudioBtn />
-                                </div>
-                                <p className="text-base font-medium bg-white/15 rounded-xl px-4 py-3 border border-white/20">means: “{tfQuestion.shownMeaning}”</p>
-                                {feedbackType === 'wrong' && selectedAnswer === 'true' && !tfQuestion.isTrue && (
-                                    <div className="text-sm font-bold text-slate-200">Correct meaning: {tfQuestion.target.meaning_en || tfQuestion.target.meaning}</div>
+                                {tfQuestion.shownWord ? (
+                                    <>
+                                        <h2 className="text-xl font-black leading-snug">{tfQuestion.shownMeaning}</h2>
+                                        <p className="text-base font-medium bg-white/15 rounded-xl px-4 py-3 border border-white/20">is the word “{tfQuestion.shownWord}”</p>
+                                        {feedbackType === 'wrong' && selectedAnswer === 'true' && !tfQuestion.isTrue && (
+                                            <div className="text-sm font-bold text-slate-200">Correct word: {tfQuestion.target.word}</div>
+                                        )}
+                                    </>
+                                ) : (
+                                    <>
+                                        <h2 className="text-3xl font-black">{tfQuestion.target.word}</h2>
+                                        <div className="flex justify-center">
+                                            <SpeakPair text={tfQuestion.target.word} notify={triggerToast} accent={speechAccent} variant="onDark" primaryAudioBtn />
+                                        </div>
+                                        <p className="text-base font-medium bg-white/15 rounded-xl px-4 py-3 border border-white/20">means: “{tfQuestion.shownMeaning}”</p>
+                                        {feedbackType === 'wrong' && selectedAnswer === 'true' && !tfQuestion.isTrue && (
+                                            <div className="text-sm font-bold text-slate-200">Correct meaning: {tfQuestion.target.meaning_en || tfQuestion.target.meaning}</div>
+                                        )}
+                                    </>
                                 )}
                             </div>
                             <div className="grid grid-cols-2 gap-3">
@@ -2819,10 +2843,20 @@
                             <div className="text-xs font-bold text-indigo-300 uppercase tracking-widest">
                                 {gameMode === 'classic' ? `⚔️ Classic Battle — Q${questionsAnswered+1}/10` : '⚡ Speed Round — What does this mean?'}
                             </div>
-                                <h2 className="text-3xl md:text-4xl font-black tracking-wide">{currentQuestion.word}</h2>
-                                <div className="flex justify-center">
-                                    <SpeakPair text={currentQuestion.word} notify={triggerToast} accent={speechAccent} variant="onDark" primaryAudioBtn />
-                                </div>
+                                {reverseMode ? (
+                                    <>
+                                        <h2 className="text-xl md:text-2xl font-black leading-snug">{currentQuestion.meaning_en || currentQuestion.meaning}</h2>
+                                        {showBangla && (currentQuestion.meaning_bn || currentQuestion.bangla) && <div className="text-sm opacity-80 font-medium">{currentQuestion.meaning_bn || currentQuestion.bangla}</div>}
+                                        <div className="text-[11px] opacity-70">Which word means this?</div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <h2 className="text-3xl md:text-4xl font-black tracking-wide">{currentQuestion.word}</h2>
+                                        <div className="flex justify-center">
+                                            <SpeakPair text={currentQuestion.word} notify={triggerToast} accent={speechAccent} variant="onDark" primaryAudioBtn />
+                                        </div>
+                                    </>
+                                )}
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
@@ -2837,8 +2871,14 @@
                                 return (
                                     <button key={idx} disabled={selectedAnswer !== null} onClick={(e) => handleAnswer(opt, e)}
                                         className={`answer-option-btn p-4 rounded-xl border text-sm text-left flex flex-col gap-1 ${style}`}>
-                                        <span className="font-semibold">{opt.meaning_en || opt.meaning}</span>
-                                        {showBangla && (opt.meaning_bn || opt.bangla) && <span className="text-xs opacity-75 font-medium">{opt.meaning_bn || opt.bangla}</span>}
+                                        {reverseMode ? (
+                                            <span className="font-bold text-base">{opt.word}</span>
+                                        ) : (
+                                            <>
+                                                <span className="font-semibold">{opt.meaning_en || opt.meaning}</span>
+                                                {showBangla && (opt.meaning_bn || opt.bangla) && <span className="text-xs opacity-75 font-medium">{opt.meaning_bn || opt.bangla}</span>}
+                                            </>
+                                        )}
                                     </button>
                                 );
                             })}
@@ -3565,6 +3605,407 @@
         }
 
         // ---------- The Multiplayer tab ----------
+        // ------------------------------------------------------------
+        // MpChat: tiny 1-to-1 chat. Messages live at chats/<uidA_uidB>/<id>
+        // and are deleted by the app once they are older than 24 hours
+        // (Firebase's free plan has no server-side expiry, so every client
+        // that opens a chat prunes the old ones).
+        // ------------------------------------------------------------
+        function MpChat({ uid, other, onClose }) {
+            const F = window.FB;
+            const pairKey = [uid, other.id].sort().join('_');
+            const path = `chats/${pairKey}`;
+            const [msgs, setMsgs] = useState([]);
+            const [text, setText] = useState('');
+            const bottomRef = useRef(null);
+            useEffect(() => {
+                if (!F || !F.rtdb) return;
+                const u = F.dbOnValue(F.dbRef(F.rtdb, path), (snap) => {
+                    const cutoff = Date.now() - 24 * 3600 * 1000;
+                    const live = [];
+                    Object.entries(snap.val() || {}).forEach(([id, m]) => {
+                        if (!m || (m.at || 0) < cutoff) F.dbRemove(F.dbRef(F.rtdb, `${path}/${id}`)).catch(() => {});
+                        else live.push({ id, ...m });
+                    });
+                    live.sort((a, b) => a.at - b.at);
+                    setMsgs(live);
+                }, (e) => console.error('chat listener', e));
+                return () => u();
+            }, [path]);
+            useEffect(() => { if (bottomRef.current) bottomRef.current.scrollIntoView({ block: 'end' }); }, [msgs.length]);
+            const send = async () => {
+                const t = text.trim().slice(0, 200);
+                if (!t) return;
+                setText('');
+                try { await F.dbSet(F.dbRef(F.rtdb, `${path}/${Date.now()}_${String(uid).slice(0, 6)}`), { from: uid, text: t, at: Date.now() }); }
+                catch (e) { console.error(e); }
+            };
+            const clearAll = () => { msgs.forEach(m => F.dbRemove(F.dbRef(F.rtdb, `${path}/${m.id}`)).catch(() => {})); };
+            return (
+                <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-end sm:items-center justify-center p-3" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+                    <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[80vh]">
+                        <div className="flex items-center gap-2.5 px-4 py-3 border-b border-slate-100">
+                            <MpAvatar name={other.name} photo={other.photo} size={30} />
+                            <div className="flex-1 min-w-0">
+                                <div className="text-sm font-black text-slate-800 truncate">{other.name}</div>
+                                <div className="text-[10px] text-slate-400 font-semibold">Messages disappear after 24 hours</div>
+                            </div>
+                            {msgs.length > 0 && <button onClick={clearAll} className="text-[10px] font-bold text-slate-400 hover:text-rose-500">Clear</button>}
+                            <button onClick={onClose} className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 text-sm font-bold">✕</button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5 min-h-[10rem]">
+                            {msgs.length === 0 && <p className="text-center text-xs text-slate-400 py-8">No messages yet. Say hi 👋</p>}
+                            {msgs.map(m => (
+                                <div key={m.id} className={`flex ${m.from === uid ? 'justify-end' : 'justify-start'}`}>
+                                    <div className={`max-w-[80%] px-3 py-1.5 rounded-2xl text-sm break-words ${m.from === uid ? 'bg-indigo-600 text-white rounded-br-sm' : 'bg-slate-100 text-slate-800 rounded-bl-sm'}`}>{m.text}</div>
+                                </div>
+                            ))}
+                            <div ref={bottomRef} />
+                        </div>
+                        <div className="flex gap-2 p-3 border-t border-slate-100">
+                            <input value={text} maxLength={200} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') send(); }} placeholder="Type a short message…" className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-slate-300 text-sm" />
+                            <button onClick={send} disabled={!text.trim()} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 disabled:opacity-40">Send</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ------------------------------------------------------------
+        // CHALLENGES: asynchronous duels (nobody has to be online together).
+        //   A picks a chunk + the words B will face, sets study/exam time, sends.
+        //   B studies the chunk, picks the words A will face, takes A's exam.
+        //   A later studies and takes B's exam. Scores stay hidden until both finish.
+        // Data: challenges/<id> (+ userChallenges/<uid>/<id> = true as each person's inbox)
+        // ------------------------------------------------------------
+        const mpToArr = (x) => Array.isArray(x) ? x.filter(Boolean) : Object.values(x || {});
+
+        function ChStudy({ chunk, studySec, onDone }) {
+            const [left, setLeft] = useState(studySec);
+            const [q, setQ] = useState('');
+            useEffect(() => {
+                const t = setInterval(() => setLeft(l => l - 1), 1000);
+                return () => clearInterval(t);
+            }, []);
+            useEffect(() => { if (left <= 0) onDone(); }, [left]);
+            const shown = chunk.filter(w => !q.trim() || String(w.w).toLowerCase().includes(q.trim().toLowerCase()) || String(w.m || '').toLowerCase().includes(q.trim().toLowerCase()));
+            return (
+                <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                        <span className="text-sm font-black text-slate-800 mr-auto">📖 Study time</span>
+                        <span className="px-3 py-1 rounded-full bg-sky-100 text-sky-700 text-xs font-black">{mpFmtClock(Math.max(0, left) * 1000)}</span>
+                        <button onClick={onDone} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">I'm ready →</button>
+                    </div>
+                    <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search the words…" className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs" />
+                    <div className="max-h-[26rem] overflow-y-auto divide-y divide-slate-100 rounded-xl border border-slate-200">
+                        {shown.map((w, i) => (
+                            <div key={i} className="px-3 py-2">
+                                <div className="text-sm font-black text-slate-800">{w.w}</div>
+                                <div className="text-xs text-slate-600">{w.m}{w.b ? ` · ${w.b}` : ''}</div>
+                                {w.e && <div className="text-[11px] text-slate-400 italic mt-0.5">{w.e}</div>}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        function ChExam({ questions, examSec, onFinish }) {
+            const [qi, setQi] = useState(0);
+            const [score, setScore] = useState(0);
+            const [picked, setPicked] = useState(null);
+            const [endAt] = useState(() => Date.now() + examSec * 1000);
+            const [left, setLeft] = useState(examSec);
+            const doneRef = useRef(false);
+            const scoreRef = useRef(0);
+            const finish = () => { if (doneRef.current) return; doneRef.current = true; onFinish(scoreRef.current); };
+            useEffect(() => {
+                const t = setInterval(() => {
+                    const l = Math.max(0, Math.ceil((endAt - Date.now()) / 1000));
+                    setLeft(l);
+                    if (l <= 0) finish();
+                }, 500);
+                return () => clearInterval(t);
+            }, []);
+            const q = questions[qi];
+            const choose = (opt) => {
+                if (picked !== null || !q) return;
+                setPicked(opt);
+                if (opt === q.answer) { scoreRef.current += 1; setScore(s => s + 1); }
+                setTimeout(() => {
+                    if (qi + 1 >= questions.length) finish();
+                    else { setQi(qi + 1); setPicked(null); }
+                }, 700);
+            };
+            if (!q) return null;
+            return (
+                <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-xs font-black">
+                        <span className="text-slate-500 mr-auto">Question {qi + 1} / {questions.length}</span>
+                        <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700">{mpFmtClock(left * 1000)}</span>
+                    </div>
+                    <div className="rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-700 text-white p-5 text-center space-y-1">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-200">{q.sub}</div>
+                        <div className={`font-black leading-snug ${q.type === 'meaning' || q.type === 'synant' ? 'text-3xl' : 'text-lg'}`}>{q.prompt}</div>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                        {q.options.map((o, i) => {
+                            let cls = 'bg-white border-slate-200 hover:bg-indigo-50';
+                            if (picked !== null) {
+                                if (o === q.answer) cls = 'bg-emerald-100 border-emerald-500 text-emerald-800 font-bold';
+                                else if (o === picked) cls = 'bg-red-100 border-red-500 text-red-900 font-bold';
+                                else cls = 'bg-white border-slate-200 opacity-60';
+                            }
+                            return <button key={i} disabled={picked !== null} onClick={() => choose(o)} className={`p-3 rounded-xl border text-sm text-left transition-all ${cls}`}>{o}</button>;
+                        })}
+                    </div>
+                </div>
+            );
+        }
+
+        function ChallengeCreate({ uid, myName, myPhoto, books, allWords, activeBookId, chunkSize, usersMap, target, onCancel, onSent, triggerToast }) {
+            const F = window.FB;
+            const [oppId, setOppId] = useState(target ? target.id : '');
+            const [bookId, setBookId] = useState(activeBookId);
+            const [chunkIdx, setChunkIdx] = useState(0);
+            const [wordCount, setWordCount] = useState(10);
+            const [studySec, setStudySec] = useState(120);
+            const [examSec, setExamSec] = useState(180);
+            const [style, setStyle] = useState('mixed');
+            const [picks, setPicks] = useState([]);
+            const [busy, setBusy] = useState(false);
+            const chunks = useMemo(() => mpChunkList(allWords[bookId] || [], chunkSize), [allWords, bookId, chunkSize]);
+            const chunk = chunks[chunkIdx] || null;
+            const slim = useMemo(() => (chunk ? chunk.words.map(mpSlimWord) : []), [chunk]);
+            const maxWords = Math.max(3, Math.min(50, slim.length));
+            useEffect(() => { setPicks([]); }, [bookId, chunkIdx]);
+            useEffect(() => { if (wordCount > maxWords) setWordCount(maxWords); setPicks(p => p.slice(0, Math.min(wordCount, maxWords))); }, [maxWords, wordCount]);
+            const opponents = Object.entries(usersMap || {}).map(([id, u]) => ({ id, ...u })).filter(u => u.id !== uid);
+            if (target && !opponents.some(o => o.id === target.id)) opponents.unshift(target);
+            const send = async () => {
+                const opp = opponents.find(o => o.id === oppId);
+                if (!opp) { triggerToast('Pick who to challenge.'); return; }
+                if (!chunk || slim.length < 3) { triggerToast('That chunk has too few words.'); return; }
+                if (picks.length !== wordCount) { triggerToast(`Pick exactly ${wordCount} words.`); return; }
+                setBusy(true);
+                try {
+                    const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+                    await F.dbSet(F.dbRef(F.rtdb, `challenges/${id}`), {
+                        from: uid, to: opp.id, fromName: myName, toName: String(opp.name || 'Player').slice(0, 30),
+                        fromPhoto: myPhoto || '', toPhoto: String(opp.photo || '').slice(0, 500),
+                        bookName: String((books.find(b => b.id === bookId) || {}).name || '').slice(0, 40),
+                        chunkLabel: chunk.label, style, wordCount, studySec, examSec, status: 'open', createdAt: Date.now(),
+                        chunk: slim, wordsForTo: picks,
+                    });
+                    await F.dbSet(F.dbRef(F.rtdb, `userChallenges/${uid}/${id}`), true);
+                    await F.dbSet(F.dbRef(F.rtdb, `userChallenges/${opp.id}/${id}`), true);
+                    triggerToast(`⚔️ Challenge sent to ${opp.name}.`);
+                    onSent();
+                } catch (e) { console.error(e); triggerToast('Could not send the challenge.'); }
+                setBusy(false);
+            };
+            const sel = "px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 bg-white w-full";
+            return (
+                <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
+                    <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-black text-slate-800 mr-auto">⚔️ New challenge</h3>
+                        <button onClick={onCancel} className="text-xs font-bold text-slate-400 hover:text-slate-600">Cancel</button>
+                    </div>
+                    <select value={oppId} onChange={(e) => setOppId(e.target.value)} className={sel}>
+                        <option value="">Who do you want to challenge?</option>
+                        {opponents.map(o => <option key={o.id} value={o.id}>{o.name}{o.online ? ' • online' : ''}</option>)}
+                    </select>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                        <select value={bookId} onChange={(e) => { setBookId(e.target.value); setChunkIdx(0); }} className={sel}>
+                            {books.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                        </select>
+                        <select value={chunkIdx} onChange={(e) => setChunkIdx(Number(e.target.value))} className={sel}>
+                            {chunks.map(c => <option key={c.index} value={c.index}>{c.label}</option>)}
+                        </select>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-4">
+                        <div>
+                            <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-400"><span>Words they face</span><span className="text-indigo-600">{wordCount}</span></div>
+                            <input type="range" min="3" max={maxWords} value={Math.min(wordCount, maxWords)} onChange={(e) => setWordCount(Number(e.target.value))} className="w-full accent-indigo-600" />
+                        </div>
+                        <div>
+                            <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-400"><span>Study time</span><span className="text-indigo-600">{mpFmtClock(studySec * 1000)}</span></div>
+                            <input type="range" min="30" max="600" step="30" value={studySec} onChange={(e) => setStudySec(Number(e.target.value))} className="w-full accent-indigo-600" />
+                        </div>
+                        <div>
+                            <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-400"><span>Exam time</span><span className="text-indigo-600">{mpFmtClock(examSec * 1000)}</span></div>
+                            <input type="range" min="30" max="900" step="15" value={examSec} onChange={(e) => setExamSec(Number(e.target.value))} className="w-full accent-indigo-600" />
+                        </div>
+                        <select value={style} onChange={(e) => setStyle(e.target.value)} className={sel}>
+                            {MP_STYLES.map(s => <option key={s.id} value={s.id}>{s.label} — {s.desc}</option>)}
+                        </select>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                        <div className="flex justify-between text-xs font-black text-slate-700"><span>Pick the words they will be tested on</span><span>{picks.length} / {wordCount}</span></div>
+                        <MpChunkPicker chunk={slim} wordCount={wordCount} picks={picks} setPicks={setPicks} locked={false} />
+                    </div>
+                    <button onClick={send} disabled={busy || picks.length !== wordCount || !oppId} className="w-full py-3 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-40">{busy ? 'Sending…' : '⚔️ Send challenge'}</button>
+                </div>
+            );
+        }
+
+        function ChallengeRun({ id, c, uid, onBack, triggerToast }) {
+            const F = window.FB;
+            const me = c.from === uid ? 'from' : 'to';
+            const oppName = me === 'from' ? c.toName : c.fromName;
+            const chunk = mpToArr(c.chunk);
+            const examWords = mpToArr(me === 'to' ? c.wordsForTo : c.wordsForFrom);
+            const needsPick = me === 'to' && !c.wordsForFrom;
+            const myDone = !!c[`${me}Done`];
+            const [phase, setPhase] = useState('intro'); // intro | study | pick | exam
+            const [picks, setPicks] = useState([]);
+            const [busy, setBusy] = useState(false);
+            const questions = useMemo(() => mpBuildQuestions(examWords, c.style || 'mixed', `${id}_${uid}`, chunk), [id, uid, c.wordsForTo, c.wordsForFrom]);
+            const finish = async (score) => {
+                try { await F.dbUpdate(F.dbRef(F.rtdb, `challenges/${id}`), { [`${me}Score`]: score, [`${me}Total`]: questions.length, [`${me}Done`]: true }); }
+                catch (e) { console.error(e); triggerToast('Could not save your score — check your connection.'); }
+            };
+            const sendPicks = async () => {
+                setBusy(true);
+                try { await F.dbUpdate(F.dbRef(F.rtdb, `challenges/${id}`), { wordsForFrom: picks }); setPhase('exam'); }
+                catch (e) { console.error(e); triggerToast('Could not send your words.'); }
+                setBusy(false);
+            };
+            const head = (
+                <div className="flex items-center gap-2">
+                    <button onClick={onBack} className="text-xs font-bold text-slate-500 hover:text-slate-800">← Back</button>
+                    <span className="text-sm font-black text-slate-800 truncate">⚔️ vs {oppName}</span>
+                    <span className="text-[11px] text-slate-400 font-semibold truncate">{c.bookName ? `${c.bookName} · ` : ''}{c.chunkLabel}</span>
+                </div>
+            );
+            let body;
+            if (myDone) {
+                const bothDone = !!(c.fromDone && c.toDone);
+                const mine = c[`${me}Score`], mineT = c[`${me}Total`];
+                const other = me === 'from' ? 'to' : 'from';
+                if (!bothDone) body = (
+                    <div className="text-center py-10 space-y-2">
+                        <div className="text-4xl">⏳</div>
+                        <p className="text-sm font-black text-slate-800">You're done!</p>
+                        <p className="text-xs text-slate-500">Scores stay hidden until {oppName} finishes too. Check back later.</p>
+                    </div>
+                ); else {
+                    const a = mine || 0, b = c[`${other}Score`] || 0;
+                    body = (
+                        <div className="text-center py-6 space-y-3">
+                            <div className="text-4xl">{a > b ? '🏆' : a < b ? '😅' : '🤝'}</div>
+                            <p className="text-lg font-black text-slate-800">{a > b ? 'You won!' : a < b ? `${oppName} won` : "It's a tie"}</p>
+                            <div className="flex justify-center gap-3">
+                                <div className="rounded-xl bg-indigo-50 px-4 py-3"><div className="text-[11px] font-bold text-slate-400">You</div><div className="text-2xl font-black text-indigo-700">{a}/{mineT}</div></div>
+                                <div className="rounded-xl bg-slate-50 px-4 py-3"><div className="text-[11px] font-bold text-slate-400">{oppName}</div><div className="text-2xl font-black text-slate-700">{b}/{c[`${other}Total`]}</div></div>
+                            </div>
+                        </div>
+                    );
+                }
+            } else if (me === 'from' && !c.wordsForFrom) {
+                body = (
+                    <div className="text-center py-10 space-y-2">
+                        <div className="text-4xl">📨</div>
+                        <p className="text-sm font-black text-slate-800">Waiting for {oppName}</p>
+                        <p className="text-xs text-slate-500 max-w-sm mx-auto">They will study the chunk, pick the words you will face, and take your exam. Then it's your turn.</p>
+                    </div>
+                );
+            } else if (phase === 'intro') {
+                body = (
+                    <div className="text-center py-6 space-y-3">
+                        <div className="text-4xl">{needsPick ? '📖' : '📝'}</div>
+                        <p className="text-sm font-black text-slate-800">{needsPick ? `${c.fromName} challenged you` : 'Your exam is ready'}</p>
+                        <p className="text-xs text-slate-500 max-w-sm mx-auto">{mpFmtClock((c.studySec || 0) * 1000)} to study{needsPick ? `, then pick ${c.wordCount} words for ${c.fromName}` : ''}, then {examWords.length} questions in {mpFmtClock((c.examSec || 60) * 1000)}.</p>
+                        <button onClick={() => setPhase((c.studySec || 0) > 0 ? 'study' : (needsPick ? 'pick' : 'exam'))} className="px-6 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700">Start</button>
+                    </div>
+                );
+            } else if (phase === 'study') {
+                body = <ChStudy chunk={chunk} studySec={c.studySec || 60} onDone={() => setPhase(needsPick ? 'pick' : 'exam')} />;
+            } else if (phase === 'pick') {
+                body = (
+                    <div className="space-y-3">
+                        <div className="flex justify-between text-xs font-black text-slate-700"><span>Pick the words {c.fromName} will be tested on</span><span>{picks.length} / {c.wordCount}</span></div>
+                        <MpChunkPicker chunk={chunk} wordCount={c.wordCount} picks={picks} setPicks={setPicks} locked={false} />
+                        <button onClick={sendPicks} disabled={busy || picks.length !== c.wordCount} className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-40">{busy ? 'Sending…' : 'Send my words & start my exam →'}</button>
+                    </div>
+                );
+            } else {
+                body = questions.length ? <ChExam questions={questions} examSec={c.examSec || 120} onFinish={finish} /> : <p className="text-sm text-slate-500 text-center py-8">Couldn't build questions from these words.</p>;
+            }
+            return <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">{head}{body}</div>;
+        }
+
+        function MpChallenges({ uid, myName, myPhoto, books, allWords, activeBookId, chunkSize, usersMap, triggerToast, target, onClearTarget }) {
+            const F = window.FB;
+            const [ids, setIds] = useState([]);
+            const [items, setItems] = useState({});
+            const [screen, setScreen] = useState(target ? 'create' : 'list'); // list | create | run
+            const [activeId, setActiveId] = useState(null);
+            useEffect(() => { if (target) setScreen('create'); }, [target]);
+            useEffect(() => {
+                const u = F.dbOnValue(F.dbRef(F.rtdb, `userChallenges/${uid}`), (snap) => setIds(Object.keys(snap.val() || {})), (e) => console.error('challenge index', e));
+                return () => u();
+            }, [uid]);
+            const idsKey = ids.slice().sort().join(',');
+            useEffect(() => {
+                const unsubs = ids.map(id => F.dbOnValue(F.dbRef(F.rtdb, `challenges/${id}`), (snap) => {
+                    setItems(prev => { const n = { ...prev }; if (snap.exists()) n[id] = snap.val(); else delete n[id]; return n; });
+                }, () => {}));
+                return () => unsubs.forEach(u => u && u());
+            }, [idsKey]);
+            const remove = async (id, c) => {
+                try {
+                    await F.dbRemove(F.dbRef(F.rtdb, `userChallenges/${uid}/${id}`));
+                    if (c) { const other = c.from === uid ? c.to : c.from; await F.dbRemove(F.dbRef(F.rtdb, `userChallenges/${other}/${id}`)).catch(() => {}); }
+                    await F.dbRemove(F.dbRef(F.rtdb, `challenges/${id}`));
+                } catch (e) { console.error(e); }
+            };
+            // tidy up finished duels after 3 days to keep the free database small
+            useEffect(() => {
+                Object.entries(items).forEach(([id, c]) => {
+                    if (c && c.fromDone && c.toDone && Date.now() - (c.createdAt || 0) > 3 * 24 * 3600 * 1000) remove(id, c);
+                });
+            }, [items]);
+            const list = Object.entries(items).map(([id, c]) => ({ id, c })).filter(x => x.c && (x.c.from === uid || x.c.to === uid)).sort((a, b) => (b.c.createdAt || 0) - (a.c.createdAt || 0));
+            if (screen === 'create') return <ChallengeCreate uid={uid} myName={myName} myPhoto={myPhoto} books={books} allWords={allWords} activeBookId={activeBookId} chunkSize={chunkSize} usersMap={usersMap} target={target} triggerToast={triggerToast} onCancel={() => { onClearTarget(); setScreen('list'); }} onSent={() => { onClearTarget(); setScreen('list'); }} />;
+            if (screen === 'run' && items[activeId]) return <ChallengeRun key={activeId} id={activeId} c={items[activeId]} uid={uid} triggerToast={triggerToast} onBack={() => setScreen('list')} />;
+            const status = (c) => {
+                const me = c.from === uid ? 'from' : 'to';
+                const opp = me === 'from' ? c.toName : c.fromName;
+                if (c[`${me}Done`] && c.fromDone && c.toDone) return { t: 'Finished — see result', tone: 'text-emerald-600', act: 'Result' };
+                if (c[`${me}Done`]) return { t: `Waiting for ${opp} to finish`, tone: 'text-slate-400', act: 'View' };
+                if (me === 'from' && !c.wordsForFrom) return { t: `Sent — waiting for ${opp} to study`, tone: 'text-slate-400', act: 'View' };
+                if (me === 'to' && !c.wordsForFrom) return { t: 'Your turn: study, pick words, take the exam', tone: 'text-indigo-600', act: 'Start' };
+                return { t: 'Your turn: study and take the exam', tone: 'text-indigo-600', act: 'Start' };
+            };
+            return (
+                <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
+                    <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-black text-slate-800 mr-auto">⚔️ Challenges <span className="text-slate-400 font-bold">· play any time, no need to be online together</span></h3>
+                        <button onClick={() => setScreen('create')} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">+ New</button>
+                    </div>
+                    {list.length === 0 && <div className="py-8 text-center text-xs text-slate-400">No challenges yet. Press "+ New", or use ⚔️ next to someone in the Players tab.</div>}
+                    <div className="divide-y divide-slate-100">
+                        {list.map(({ id, c }) => {
+                            const me = c.from === uid ? 'from' : 'to';
+                            const st = status(c);
+                            return (
+                                <div key={id} className="flex items-center gap-3 py-2.5">
+                                    <MpAvatar name={me === 'from' ? c.toName : c.fromName} photo={me === 'from' ? c.toPhoto : c.fromPhoto} />
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-extrabold text-slate-800 truncate">{me === 'from' ? `You → ${c.toName}` : `${c.fromName} → You`}</div>
+                                        <div className={`text-[11px] font-semibold truncate ${st.tone}`}>{st.t} · {c.chunkLabel}</div>
+                                    </div>
+                                    <button onClick={() => { setActiveId(id); setScreen('run'); }} className="px-3 py-1.5 rounded-lg bg-indigo-100 text-indigo-700 text-xs font-bold hover:bg-indigo-200">{st.act}</button>
+                                    <button onClick={() => remove(id, c)} title="Delete" className="px-2 py-1.5 text-slate-300 hover:text-rose-500 text-sm font-bold">🗑</button>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        }
+
         function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast, chunkSize = 25 }) {
             const [fbReady, setFbReady] = useState(!!window.FB);
             const [conn, setConn] = useState(false);
@@ -3578,6 +4019,7 @@
             const [mode, setMode] = useState('swap');
             const [style, setStyle] = useState('mixed');
             const [wordCount, setWordCount] = useState(10);
+            const [maxPlayers, setMaxPlayers] = useState(10); // 2-20, chosen by the host
             const [timeLimit, setTimeLimit] = useState(120);
             const [myPicks, setMyPicks] = useState([]);
             // chunk / study settings for a new room
@@ -3586,6 +4028,8 @@
             const [studySec, setStudySec] = useState(120);
             // public directory, leaderboard, invites
             const [view, setView] = useState('play');
+            const [challengeTarget, setChallengeTarget] = useState(null); // opponent preselected via the ⚔️ button
+            const [chatWith, setChatWith] = useState(null); // {id,name,photo} of the person I'm chatting with
             const [usersMap, setUsersMap] = useState({});
             const [invites, setInvites] = useState({});
             const [userSearch, setUserSearch] = useState('');
@@ -3671,7 +4115,7 @@
             }, [conn, uid]);
 
             const createChunks = useMemo(() => mpChunkList(allWords[bookId] || [], chunkSize), [allWords, bookId, chunkSize]);
-            const maxWords = (chunkIdx >= 0 && createChunks[chunkIdx]) ? Math.max(3, Math.min(30, createChunks[chunkIdx].words.length)) : 30;
+            const maxWords = (chunkIdx >= 0 && createChunks[chunkIdx]) ? Math.max(3, Math.min(50, createChunks[chunkIdx].words.length)) : 50;
             useEffect(() => { if (wordCount > maxWords) setWordCount(maxWords); }, [maxWords]);
             useEffect(() => { setChunkIdx(-1); }, [bookId]);
             useEffect(() => { if (chunkIdx >= createChunks.length) setChunkIdx(-1); }, [createChunks.length]);
@@ -3688,6 +4132,22 @@
                 const u = FB.dbOnValue(rr(`invites/${uid}`), (snap) => setInvites(snap.val() || {}), (err) => console.error('invites listener', err));
                 return () => u();
             }, [fbReady, uid, conn]);
+            // pokes sent to me: show a toast for each fresh one, then delete them all
+            // (this also cleans up anything older than 24h that piled up while offline)
+            useEffect(() => {
+                if (!fbReady || !rtdb || !uid || !conn) return;
+                const u = FB.dbOnValue(rr(`pokes/${uid}`), (snap) => {
+                    const entries = Object.entries(snap.val() || {});
+                    if (!entries.length) return;
+                    entries
+                        .filter(([, pk]) => pk && Date.now() - (pk.at || 0) < 24 * 3600 * 1000)
+                        .slice(0, 3)
+                        .forEach(([, pk]) => triggerToast(`👋 ${pk.from} poked you — time to study!`));
+                    entries.forEach(([fromUid]) => FB.dbRemove(rr(`pokes/${uid}/${fromUid}`)).catch(() => {}));
+                }, (err) => console.error('pokes listener', err));
+                return () => u();
+            }, [fbReady, uid, conn]);
+            const pokeCooldownRef = useRef({});
             const isPublic = !!(uid && usersMap[uid]);
             // keep my directory entry fresh + online dot correct
             useEffect(() => {
@@ -3716,7 +4176,7 @@
                     if (!code) throw new Error('Could not find a free room code, try again.');
                     const chunkObj = chunkIdx >= 0 ? createChunks[chunkIdx] : null;
                     const metaObj = {
-                        hostUid: uid, hostName: myName, mode, style, wordCount, timeLimit,
+                        hostUid: uid, hostName: myName, mode, style, wordCount, timeLimit, maxPlayers,
                         status: 'lobby', round: 1, createdAt: Date.now(),
                     };
                     if (chunkObj) {
@@ -3753,7 +4213,8 @@
                     const already = val.players && val.players[uid];
                     if (!already) {
                         if (val.meta.status !== 'lobby') { triggerToast('That game has already started.'); return; }
-                        if (Object.keys(val.players || {}).length >= MP_MAX_PLAYERS) { triggerToast(`That room is full (${MP_MAX_PLAYERS} players max).`); return; }
+                        const cap = (val.meta && val.meta.maxPlayers) || MP_MAX_PLAYERS;
+                        if (Object.keys(val.players || {}).length >= cap) { triggerToast(`That room is full (${cap} players max).`); return; }
                         await FB.dbSet(rr(`rooms/${code}/players/${uid}`), {
                             name: myName, photo: myPhoto, online: true, ready: val.meta.mode === 'same', score: 0, answered: 0, done: false, joinedAt: Date.now(),
                         });
@@ -3849,6 +4310,15 @@
                     triggerToast(`Invite sent to ${target.name}.`);
                 } catch (e) { console.error(e); triggerToast('Could not send the invite.'); }
             };
+            const sendPoke = async (target) => {
+                const last = pokeCooldownRef.current[target.id] || 0;
+                if (Date.now() - last < 30000) { triggerToast('Easy! You can poke them again in a few seconds.'); return; }
+                pokeCooldownRef.current[target.id] = Date.now();
+                try {
+                    await FB.dbSet(rr(`pokes/${target.id}/${uid}`), { from: myName, photo: myPhoto, at: Date.now() });
+                    triggerToast(`👋 Poked ${target.name}.`);
+                } catch (e) { console.error(e); triggerToast('Could not send the poke.'); }
+            };
             const dismissInvite = (fromUid) => { FB.dbRemove(rr(`invites/${uid}/${fromUid}`)).catch(() => {}); };
             const acceptInvite = async (fromUid, code) => {
                 if (roomCode) { triggerToast('Leave your current room first.'); return; }
@@ -3890,7 +4360,7 @@
             };
 
             // ---------------- gates ----------------
-            const shell = (children) => <div className="space-y-5 tab-panel-enter">{children}</div>;
+            const shell = (children) => <div className="space-y-5 tab-panel-enter">{children}{chatWith && uid && <MpChat uid={uid} other={chatWith} onClose={() => setChatWith(null)} />}</div>;
             const header = (
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                     <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">🌐 Multiplayer Arena</h2>
@@ -3951,10 +4421,13 @@
                         </div>
                     )}
                     <div className="flex gap-1.5 flex-wrap">
-                        {[['play', '🎮 Play'], ['players', `👥 Players (${usersList.length})`], ['board', '🏆 Leaderboard']].map(([k, l]) => (
+                        {[['play', '🎮 Play'], ['players', `👥 Players (${usersList.length})`], ['challenges', '⚔️ Challenges'], ['board', '🏆 Leaderboard']].map(([k, l]) => (
                             <button key={k} onClick={() => setView(k)} className={`px-4 py-2 rounded-xl text-xs font-extrabold border transition-all ${view === k ? 'bg-indigo-600 text-white border-indigo-600 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>{l}</button>
                         ))}
                     </div>
+                    {view === 'challenges' && (
+                        <MpChallenges uid={uid} myName={myName} myPhoto={myPhoto} books={books} allWords={allWords} activeBookId={activeBookId} chunkSize={chunkSize} usersMap={usersMap} triggerToast={triggerToast} target={challengeTarget} onClearTarget={() => setChallengeTarget(null)} />
+                    )}
                     {view === 'players' && (
                         <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -3962,7 +4435,7 @@
                                 <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search players…" className="px-3 py-2 rounded-lg border border-slate-300 text-xs w-44" />
                             </div>
                             {joinCta}
-                            {!roomCode && <p className="text-[11px] text-slate-400">To invite someone, first create a room on the Play tab — then come back here and press Invite.</p>}
+                            {!roomCode && <p className="text-[11px] text-slate-400">To invite someone, create a room first — the room lobby then shows an Invite list. You can 👋 poke anyone any time.</p>}
                             <div className="divide-y divide-slate-100 max-h-[32rem] overflow-y-auto">
                                 {usersList.filter(u => !userSearch.trim() || String(u.name || '').toLowerCase().includes(userSearch.trim().toLowerCase()))
                                     .sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0) || (b.points || 0) - (a.points || 0)).map(u => (
@@ -3974,6 +4447,15 @@
                                         </div>
                                         {u.id !== uid && (
                                             <button onClick={() => sendInvite(u)} disabled={!roomCode} title={roomCode ? 'Invite to my room' : 'Create a room first'} className="px-3 py-1.5 rounded-lg bg-indigo-100 text-indigo-700 text-xs font-bold hover:bg-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed">✉ Invite</button>
+                                        )}
+                                        {u.id !== uid && (
+                                            <button onClick={() => sendPoke(u)} title="Nudge them to study" className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-700 text-xs font-bold hover:bg-amber-200">👋 Poke</button>
+                                        )}
+                                        {u.id !== uid && (
+                                            <button onClick={() => setChatWith({ id: u.id, name: u.name, photo: u.photo })} title="Send a short message" className="px-3 py-1.5 rounded-lg bg-sky-100 text-sky-700 text-xs font-bold hover:bg-sky-200">💬 Chat</button>
+                                        )}
+                                        {u.id !== uid && (
+                                            <button onClick={() => { setChallengeTarget({ id: u.id, name: u.name, photo: u.photo }); setView('challenges'); }} title="Challenge to an exam (no need to be online together)" className="px-3 py-1.5 rounded-lg bg-rose-100 text-rose-700 text-xs font-bold hover:bg-rose-200">⚔️ Challenge</button>
                                         )}
                                     </div>
                                 ))}
@@ -4055,7 +4537,11 @@
                                     <input type="range" min="30" max="600" step="15" value={timeLimit} onChange={(e) => setTimeLimit(Number(e.target.value))} className="w-full accent-indigo-600" />
                                 </div>
                             </div>
-                            <p className="text-[11px] text-slate-400">{perPlayer} Up to {MP_MAX_PLAYERS} players.</p>
+                            <div>
+                                <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-400"><span>Max players in the room</span><span className="text-indigo-600">{maxPlayers}</span></div>
+                                <input type="range" min="2" max="20" value={maxPlayers} onChange={(e) => setMaxPlayers(Number(e.target.value))} className="w-full accent-indigo-600" />
+                            </div>
+                            <p className="text-[11px] text-slate-400">{perPlayer}</p>
                             <button onClick={createRoom} disabled={busy || !conn} className="w-full py-3 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-50">{busy ? 'Creating…' : 'Create room'}</button>
                         </div>
                         <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm h-fit">
@@ -4132,7 +4618,7 @@
                     <div className="bg-white border border-slate-200 rounded-2xl p-4 h-fit">
                         <div className="flex items-center justify-between mb-2">
                             <h3 className="text-sm font-black text-slate-800">Players</h3>
-                            <span className="text-[11px] font-bold text-slate-400">{playerList.length}/{MP_MAX_PLAYERS}</span>
+                            <span className="text-[11px] font-bold text-slate-400">{playerList.length}/{meta.maxPlayers || MP_MAX_PLAYERS}</span>
                         </div>
                         <div className="space-y-1.5">
                             {playerList.map(p => (
@@ -4146,6 +4632,34 @@
                                 </div>
                             ))}
                         </div>
+                        {(() => {
+                            const inRoom = new Set(playerList.map(pl => pl.id));
+                            const invitable = Object.entries(usersMap || {}).map(([id, u]) => ({ id, ...u }))
+                                .filter(u => !inRoom.has(u.id))
+                                .filter(u => !userSearch.trim() || String(u.name || '').toLowerCase().includes(userSearch.trim().toLowerCase()))
+                                .sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0));
+                            return (
+                                <div className="mt-4 pt-3 border-t border-slate-100 space-y-2">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <h4 className="text-xs font-black text-slate-800">✉ Invite players</h4>
+                                        <span className="text-[10px] font-bold text-slate-400">{invitable.filter(u => u.online).length} online</span>
+                                    </div>
+                                    <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search players…" className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs" />
+                                    <div className="max-h-56 overflow-y-auto space-y-1">
+                                        {invitable.map(u => (
+                                            <div key={u.id} className="flex items-center gap-2 rounded-xl bg-slate-50 px-2 py-1.5">
+                                                <div className="relative"><MpAvatar name={u.name} photo={u.photo} size={28} /><span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${u.online ? 'bg-emerald-500' : 'bg-slate-300'}`} /></div>
+                                                <div className="flex-1 min-w-0 text-xs font-extrabold text-slate-800 truncate">{u.name}</div>
+                                                <button onClick={() => sendInvite(u)} className="px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-700 text-[11px] font-bold hover:bg-indigo-200">✉ Invite</button>
+                                                <button onClick={() => sendPoke(u)} className="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 text-[11px] font-bold hover:bg-amber-200" title="Nudge to study">👋</button>
+                                                <button onClick={() => setChatWith({ id: u.id, name: u.name, photo: u.photo })} className="px-2 py-1 rounded-lg bg-sky-100 text-sky-700 text-[11px] font-bold hover:bg-sky-200" title="Message">💬</button>
+                                            </div>
+                                        ))}
+                                        {invitable.length === 0 && <div className="py-4 text-center text-[11px] text-slate-400">Nobody else is on the public list yet. Ask friends to open Multiplayer → Players → "Make me visible", or share the room code.</div>}
+                                    </div>
+                                </div>
+                            );
+                        })()}
                     </div>
                     <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
                         {studyFirst ? (
@@ -5021,6 +5535,7 @@ Rules:
             // Quiz configuration (persisted)
             const QUIZ_TYPE_OPTIONS = [
                 { id: 'quiz', label: 'Quiz (Meaning)' },
+                { id: 'reverse', label: 'Reverse (Meaning → Word)' },
                 { id: 'fillin', label: 'Fill-in-the-blank' },
                 { id: 'synonym', label: 'Synonym' },
                 { id: 'antonym', label: 'Antonym' },
@@ -6190,6 +6705,15 @@ Rules:
                 const options = [...distractors, target].sort(() => 0.5 - Math.random());
                 return { qType: 'quiz', target, options };
             };
+            // REVERSE: show the meaning, pick the word.
+            const genReverseQuestion = (pool, allWords) => {
+                const withMeaning = pool.filter(w => w.meaning_en || w.meaning);
+                const source = withMeaning.length ? withMeaning : pool;
+                const target = source[Math.floor(Math.random() * source.length)];
+                const distractors = allWords.filter(w => w.id !== target.id).sort(() => 0.5 - Math.random()).slice(0, 3);
+                const options = [...distractors.map(w => ({ id: w.id, word: w.word })), { id: target.id, word: target.word }].sort(() => 0.5 - Math.random());
+                return { qType: 'reverse', target, options };
+            };
             const genFillinQuestion = (pool, allWords) => {
                 const withSentence = pool.filter(w => {
                     const s = w.example_main || w.sentence || '';
@@ -6232,6 +6756,7 @@ Rules:
             const buildQuizQuestions = (pool, allWords, types, count) => {
                 const generatorsByType = {
                     quiz: () => genQuizQuestion(pool, allWords),
+                    reverse: () => genReverseQuestion(pool, allWords),
                     fillin: () => genFillinQuestion(pool, allWords),
                     synonym: () => genRelatedQuestion(pool, allWords, 'synonym'),
                     antonym: () => genRelatedQuestion(pool, allWords, 'antonym'),
@@ -7722,7 +8247,7 @@ Rules:
                                         <span>{activeBook.name} Companion</span>
                                     </h1>
                                     <p className="text-indigo-200/80 text-xs sm:text-sm font-medium mt-1">
-                                        Welcome back! Ready to grow your vocabulary today? ✨
+                                        Welcome back{(typeof displayName === 'string' && displayName && displayName !== 'Guest') ? ', ' + displayName.split(' ')[0] : ''}! Ready to grow your vocabulary today? ✨
                                     </p>
                                 </div>
                             </div>
@@ -8707,6 +9232,16 @@ Rules:
                                         </div>
                                     )}
 
+                                    {q.qType === 'reverse' && (
+                                        <div className="space-y-2">
+                                            <p className="text-xs text-slate-500 font-semibold uppercase">Which word means:</p>
+                                            <h2 className="text-xl font-extrabold text-slate-900 leading-snug">{q.target.meaning_en || q.target.meaning}</h2>
+                                            {showBangla && (q.target.meaning_bn || q.target.bangla) && (
+                                                <p className="text-sm font-semibold text-slate-500">{q.target.meaning_bn || q.target.bangla}</p>
+                                            )}
+                                        </div>
+                                    )}
+
                                     {q.qType === 'fillin' && (
                                         <div className="space-y-3">
                                             <p className="text-xs text-slate-500 font-semibold uppercase">Fill in the blank:</p>
@@ -8749,10 +9284,10 @@ Rules:
                                     )}
 
                                     {/* ===== ANSWER OPTIONS (varies by type) ===== */}
-                                    {(q.qType === 'quiz' || q.qType === 'fillin' || q.qType === 'synonym' || q.qType === 'antonym') && (
+                                    {(q.qType === 'quiz' || q.qType === 'reverse' || q.qType === 'fillin' || q.qType === 'synonym' || q.qType === 'antonym') && (
                                         <div className="space-y-3">
                                             {q.options.map((opt, idx) => {
-                                                const isTarget = q.qType === 'quiz' || q.qType === 'fillin'
+                                                const isTarget = q.qType === 'quiz' || q.qType === 'reverse' || q.qType === 'fillin'
                                                     ? opt.id === q.target.id
                                                     : opt.id === q.correctId;
                                                 let btnStyle = "bg-slate-50 border-slate-200 text-slate-800 hover:bg-slate-100";
