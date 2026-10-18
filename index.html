@@ -3054,9 +3054,11 @@
 
         // Turns a pool of slim words into multiple-choice questions. Seeded, so the
         // same player always gets the same questions/options on every re-render.
-        function mpBuildQuestions(pool, style, seedStr) {
+        function mpBuildQuestions(pool, style, seedStr, extra) {
             const rnd = mpRng(seedStr);
             const items = mpShuffle((pool || []).filter(p => p && p.w), rnd);
+            // Wrong options may also come from the rest of the room's chunk (so they look plausible)
+            const distractItems = [...items, ...(extra || []).filter(e => e && e.w && !items.some(i => i.w === e.w))];
             const types = ['meaning', 'word', 'fill', 'synant'];
             const out = [];
             const pickDistractors = (cands, exclude, n) => {
@@ -3071,7 +3073,7 @@
                 return uniq.slice(0, n);
             };
             items.forEach((p, i) => {
-                const others = items.filter(o => o !== p);
+                const others = distractItems.filter(o => o.w !== p.w);
                 const syn = (p.s || []).filter(Boolean);
                 const ant = (p.a || []).filter(Boolean);
                 const canFill = !!p.e && new RegExp(mpEscapeRe(p.w), 'i').test(p.e);
@@ -3138,7 +3140,7 @@
         }
 
         // ---------- The in-game screen (countdown -> questions -> results) ----------
-        function MpPlay({ code, room, uid, serverNow, onUpdateMe, onPlayAgain, onLeave, isHost }) {
+        function MpPlay({ code, room, uid, serverNow, onUpdateMe, onPlayAgain, onLeave, isHost, onResults }) {
             const meta = room.meta;
             const limitMs = (meta.timeLimit || 60) * 1000;
             const startAt = meta.startAt;
@@ -3158,9 +3160,10 @@
                 return out;
             }, [meta.mode, meta.hostUid, uid, JSON.stringify(room.words || {})]);
 
+            const chunkWords = useMemo(() => Object.values(room.chunk || {}), [JSON.stringify(room.chunk || {})]);
             const questions = useMemo(
-                () => mpBuildQuestions(pool, meta.style || 'mixed', `${code}-${meta.round}-${uid}`),
-                [pool, meta.style, meta.round, code, uid]
+                () => mpBuildQuestions(pool, meta.style || 'mixed', `${code}-${meta.round}-${uid}`, chunkWords),
+                [pool, meta.style, meta.round, code, uid, chunkWords]
             );
 
             const [now, setNow] = useState(serverNow());
@@ -3203,6 +3206,15 @@
             const onlineRows = ranking.filter(r => r.online);
             const allDone = onlineRows.length > 0 && onlineRows.every(r => r.done);
             const resultsReady = started && (allDone || now > endAt + 2500);
+
+            // tell the parent once, so points / wins can be recorded on my public profile
+            const resultsFiredRef = useRef(false);
+            useEffect(() => {
+                if (resultsReady && !resultsFiredRef.current) {
+                    resultsFiredRef.current = true;
+                    if (onResults) onResults(ranking);
+                }
+            }, [resultsReady]);
 
             // ---- results ----
             if (resultsReady) {
@@ -3401,8 +3413,159 @@
             );
         }
 
+        // ---------- Chunks (same definition as the Word List: A→Z, sliced by chunk size) ----------
+        function mpChunkList(words, size) {
+            const sorted = (words || []).filter(w => w && w.word).slice().sort((a, b) => String(a.word).localeCompare(String(b.word)));
+            const out = [];
+            const n = Math.max(1, size || 25);
+            for (let i = 0; i < sorted.length; i += n) {
+                out.push({ index: out.length, label: `Chunk ${out.length + 1} (${i + 1}–${Math.min(i + n, sorted.length)})`, words: sorted.slice(i, i + n) });
+            }
+            return out;
+        }
+
+        // Picker for rooms that have a chunk: choose only from the chunk's (already slim) words
+        function MpChunkPicker({ chunk, wordCount, picks, setPicks, locked }) {
+            const picked = new Set(picks.map(p => p.w.toLowerCase()));
+            const toggle = (w) => {
+                if (locked) return;
+                const k = w.w.toLowerCase();
+                if (picked.has(k)) setPicks(picks.filter(p => p.w.toLowerCase() !== k));
+                else if (picks.length < wordCount) setPicks([...picks, w]);
+            };
+            const randomFill = () => {
+                if (locked) return;
+                const rest = chunk.filter(w => !picked.has(w.w.toLowerCase()));
+                setPicks([...picks, ...mpShuffle(rest, Math.random).slice(0, wordCount - picks.length)]);
+            };
+            return (
+                <div className="space-y-2">
+                    <div className="flex gap-2 flex-wrap items-center">
+                        <span className="text-[11px] font-bold text-slate-400 mr-auto">Tap words from the chunk</span>
+                        <button onClick={randomFill} disabled={locked || picks.length >= wordCount} className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold hover:bg-amber-200 disabled:opacity-40">🎲 Fill randomly</button>
+                        <button onClick={() => setPicks([])} disabled={locked || !picks.length} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 disabled:opacity-40">Clear</button>
+                    </div>
+                    <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+                        {chunk.map((w, i) => {
+                            const on = picked.has(w.w.toLowerCase());
+                            return (
+                                <button key={i} onClick={() => toggle(w)} disabled={locked || (!on && picks.length >= wordCount)} className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs ${on ? 'bg-indigo-50' : 'hover:bg-slate-50'} disabled:opacity-50`}>
+                                    <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] font-black shrink-0 ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'}`}>{on ? '✓' : ''}</span>
+                                    <span className="font-extrabold text-slate-800">{w.w}</span>
+                                    <span className="text-slate-400 truncate">{w.m || ''}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        }
+
+        // ---------- Study phase: everyone reads the chunk (and picks words) before the game starts ----------
+        function MpStudy({ room, isHost, serverNow, canPick, myPicks, setMyPicks, iAmLocked, lockedWords, onAutoLock, onLock, onUnlock, onStartGame, onSkip, onLeave }) {
+            const meta = room.meta;
+            const chunk = useMemo(() => Object.values(room.chunk || {}), [JSON.stringify(room.chunk || {})]);
+            const [now, setNow] = useState(serverNow());
+            const [open, setOpen] = useState(null);
+            const [q, setQ] = useState('');
+            const firedLock = useRef(false);
+            const firedStart = useRef(false);
+            useEffect(() => { const t = setInterval(() => setNow(serverNow()), 250); return () => clearInterval(t); }, []);
+            const endAt = meta.studyEndAt || now;
+            const remaining = Math.max(0, endAt - now);
+            const total = Math.max(1000, (meta.studySec || 60) * 1000);
+            const online = Object.values(room.players || {}).filter(p => p.online !== false);
+            const hostLocked = Object.values((room.words && room.words[meta.hostUid]) || {}).length === meta.wordCount;
+            const allReady = online.length > 0 && (meta.mode === 'same' ? hostLocked : online.every(p => p.ready));
+            const over = remaining <= 0;
+
+            // when the clock runs out, lock my picks (filling any gaps at random)
+            useEffect(() => {
+                if (!over || firedLock.current) return;
+                firedLock.current = true;
+                if (canPick && !iAmLocked) onAutoLock(myPicks, chunk);
+            }, [over]);
+            // host moves everyone on once everybody is locked (or after a short grace period)
+            useEffect(() => {
+                if (!isHost || firedStart.current || !over) return;
+                if (allReady || now > endAt + 4500) { firedStart.current = true; onStartGame(); }
+            }, [now, allReady, over]);
+
+            const shown = chunk.filter(w => !q.trim() || w.w.toLowerCase().includes(q.trim().toLowerCase()));
+            const urgent = remaining < 10000;
+            return (
+                <div className="space-y-4">
+                    <div className="rounded-3xl p-5 bg-gradient-to-br from-sky-600 via-indigo-600 to-violet-700 text-white shadow-xl">
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <div>
+                                <div className="text-[11px] font-bold uppercase tracking-widest text-sky-100/80">📖 Study phase</div>
+                                <div className="text-lg font-black">{meta.bookName ? `${meta.bookName} · ` : ''}{meta.chunkLabel || 'Chunk'}</div>
+                                <div className="text-xs text-sky-100/80">{canPick ? `Read the words — and pick ${meta.wordCount} ${meta.mode === 'swap' ? 'for the others to face' : 'for everyone'}. Unfinished picks are filled randomly.` : 'Read and memorise — the host is choosing the words for the game.'}</div>
+                            </div>
+                            <div className="text-right">
+                                <div className={`text-4xl font-black tabular-nums ${urgent ? 'animate-pulse text-rose-200' : ''}`}>{mpFmtClock(remaining)}</div>
+                                {isHost && !over && <button onClick={onSkip} className="mt-1 text-[11px] font-bold underline text-sky-100 hover:text-white">Skip the rest</button>}
+                            </div>
+                        </div>
+                        <div className="h-2 rounded-full bg-white/20 mt-3 overflow-hidden"><div className="h-full bg-white transition-all duration-300" style={{ width: `${Math.max(0, Math.min(100, (remaining / total) * 100))}%` }} /></div>
+                        {over && <div className="text-xs font-bold mt-2 text-sky-100">Time's up — getting the game ready…</div>}
+                    </div>
+                    <div className={`grid gap-4 ${canPick ? 'lg:grid-cols-[1.2fr_1fr]' : ''}`}>
+                        <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2">
+                            <div className="flex items-center gap-2">
+                                <h3 className="text-sm font-black text-slate-800 mr-auto">The chunk ({chunk.length} words)</h3>
+                                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs w-32" />
+                            </div>
+                            <div className="max-h-[28rem] overflow-y-auto space-y-1.5 pr-1">
+                                {shown.map((w, i) => (
+                                    <div key={i} className="rounded-xl border border-slate-200 bg-slate-50">
+                                        <button onClick={() => setOpen(open === w.w ? null : w.w)} className="w-full text-left px-3 py-2">
+                                            <div className="flex items-center gap-2"><span className="text-sm font-extrabold text-slate-800">{w.w}</span><span className="text-[11px] text-slate-400 truncate">{w.m}</span></div>
+                                        </button>
+                                        {open === w.w && (
+                                            <div className="px-3 pb-3 text-xs space-y-1 border-t border-slate-200 pt-2">
+                                                {w.b && <div className="font-semibold text-emerald-700">{w.b}</div>}
+                                                {w.m && <div className="text-slate-600">{w.m}</div>}
+                                                {w.e && <div className="italic text-slate-400">“{w.e}”</div>}
+                                                {(w.s && Object.values(w.s).length > 0) && <div className="text-emerald-700"><b>Synonyms:</b> {Object.values(w.s).join(', ')}</div>}
+                                                {(w.a && Object.values(w.a).length > 0) && <div className="text-rose-600"><b>Antonyms:</b> {Object.values(w.a).join(', ')}</div>}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        {canPick && (
+                            <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3 h-fit">
+                                <div className="flex items-center justify-between gap-2">
+                                    <h3 className="text-sm font-black text-slate-800">{meta.mode === 'swap' ? 'Your picks' : 'Pick the words'}</h3>
+                                    <span className={`text-xs font-black px-2.5 py-1 rounded-full ${(iAmLocked ? lockedWords.length : myPicks.length) === meta.wordCount ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{iAmLocked ? lockedWords.length : myPicks.length} / {meta.wordCount}</span>
+                                </div>
+                                {iAmLocked ? (
+                                    <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-center">
+                                        <div className="text-2xl">✅</div>
+                                        <div className="text-sm font-black text-emerald-800 mt-1">Locked in</div>
+                                        <div className="text-[11px] text-emerald-700/80 mt-0.5 line-clamp-2">{lockedWords.map(w => w.w).join(' · ')}</div>
+                                        {!over && <button onClick={onUnlock} className="mt-3 px-4 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-700 text-xs font-bold hover:bg-emerald-100">Edit my words</button>}
+                                    </div>
+                                ) : (
+                                    <>
+                                        <MpChunkPicker chunk={chunk} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={over} />
+                                        <button onClick={onLock} disabled={myPicks.length !== meta.wordCount || over} className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-40">🔒 Lock in {meta.wordCount} words</button>
+                                    </>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex gap-2 justify-end">
+                        <button onClick={onLeave} className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 font-bold text-sm hover:bg-slate-100">{isHost ? 'Close room' : 'Leave room'}</button>
+                    </div>
+                </div>
+            );
+        }
+
         // ---------- The Multiplayer tab ----------
-        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast }) {
+        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast, chunkSize = 25 }) {
             const [fbReady, setFbReady] = useState(!!window.FB);
             const [conn, setConn] = useState(false);
             const [connWaited, setConnWaited] = useState(false);
@@ -3417,6 +3580,15 @@
             const [wordCount, setWordCount] = useState(10);
             const [timeLimit, setTimeLimit] = useState(120);
             const [myPicks, setMyPicks] = useState([]);
+            // chunk / study settings for a new room
+            const [bookId, setBookId] = useState(activeBookId);
+            const [chunkIdx, setChunkIdx] = useState(-1);
+            const [studySec, setStudySec] = useState(120);
+            // public directory, leaderboard, invites
+            const [view, setView] = useState('play');
+            const [usersMap, setUsersMap] = useState({});
+            const [invites, setInvites] = useState({});
+            const [userSearch, setUserSearch] = useState('');
 
             const uid = cloudUser ? cloudUser.uid : null;
             const myName = ((nickname || '').trim() || (cloudUser && cloudUser.displayName) || 'Player').slice(0, 24);
@@ -3498,6 +3670,34 @@
                 if (saved) joinRoom(saved, true);
             }, [conn, uid]);
 
+            const createChunks = useMemo(() => mpChunkList(allWords[bookId] || [], chunkSize), [allWords, bookId, chunkSize]);
+            const maxWords = (chunkIdx >= 0 && createChunks[chunkIdx]) ? Math.max(3, Math.min(30, createChunks[chunkIdx].words.length)) : 30;
+            useEffect(() => { if (wordCount > maxWords) setWordCount(maxWords); }, [maxWords]);
+            useEffect(() => { setChunkIdx(-1); }, [bookId]);
+            useEffect(() => { if (chunkIdx >= createChunks.length) setChunkIdx(-1); }, [createChunks.length]);
+
+            // live list of everybody who joined the public directory
+            useEffect(() => {
+                if (!fbReady || !rtdb || !uid || !conn) return;
+                const u = FB.dbOnValue(rr('users'), (snap) => setUsersMap(snap.val() || {}), (err) => console.error('users listener', err));
+                return () => u();
+            }, [fbReady, uid, conn]);
+            // invites sent to me
+            useEffect(() => {
+                if (!fbReady || !rtdb || !uid || !conn) return;
+                const u = FB.dbOnValue(rr(`invites/${uid}`), (snap) => setInvites(snap.val() || {}), (err) => console.error('invites listener', err));
+                return () => u();
+            }, [fbReady, uid, conn]);
+            const isPublic = !!(uid && usersMap[uid]);
+            // keep my directory entry fresh + online dot correct
+            useEffect(() => {
+                if (!isPublic || !conn || !rtdb) return;
+                const pr = rr(`users/${uid}/online`);
+                FB.dbOnDisconnect(pr).set(false).catch(() => {});
+                FB.dbUpdate(rr(`users/${uid}`), { online: true, lastSeen: Date.now(), name: myName, photo: myPhoto }).catch(() => {});
+                return () => { try { FB.dbOnDisconnect(pr).cancel().catch(() => {}); } catch (e) {} };
+            }, [isPublic, conn, uid, myName, myPhoto]);
+
             const leaveLocal = () => {
                 try { sessionStorage.removeItem('wordsmart_mp_room'); } catch (e) {}
                 setRoomCode(null); setRoom(null); setRoomLoaded(false); setMyPicks([]);
@@ -3514,13 +3714,22 @@
                         if (!snap.exists()) { code = c; break; }
                     }
                     if (!code) throw new Error('Could not find a free room code, try again.');
-                    await FB.dbSet(rr(`rooms/${code}/meta`), {
+                    const chunkObj = chunkIdx >= 0 ? createChunks[chunkIdx] : null;
+                    const metaObj = {
                         hostUid: uid, hostName: myName, mode, style, wordCount, timeLimit,
                         status: 'lobby', round: 1, createdAt: Date.now(),
-                    });
+                    };
+                    if (chunkObj) {
+                        metaObj.bookName = String((books.find(b => b.id === bookId) || {}).name || '').slice(0, 40);
+                        metaObj.chunkLabel = chunkObj.label;
+                        metaObj.chunkIndex = chunkObj.index;
+                        metaObj.studySec = studySec;
+                    }
+                    await FB.dbSet(rr(`rooms/${code}/meta`), metaObj);
                     await FB.dbSet(rr(`rooms/${code}/players/${uid}`), {
                         name: myName, photo: myPhoto, online: true, ready: mode === 'same', score: 0, answered: 0, done: false, joinedAt: Date.now(),
                     });
+                    if (chunkObj) await FB.dbSet(rr(`rooms/${code}/chunk`), chunkObj.words.map(mpSlimWord));
                     try { sessionStorage.setItem('wordsmart_mp_room', code); } catch (e) {}
                     setRoom(null); setMyPicks([]); setRoomCode(code);
                 } catch (e) {
@@ -3600,10 +3809,78 @@
                     });
                 } catch (e) { triggerToast('Could not start the game.'); }
             };
+            const startStudy = async () => {
+                if (!room) return;
+                try {
+                    await FB.dbUpdate(rr(`rooms/${roomCode}/meta`), { status: 'study', studyEndAt: serverNow() + (room.meta.studySec || 60) * 1000 });
+                } catch (e) { triggerToast('Could not start the study phase.'); }
+            };
+            const skipStudy = () => { FB.dbUpdate(rr(`rooms/${roomCode}/meta`), { studyEndAt: serverNow() }).catch(() => {}); };
+            // time is up: lock whatever I picked, filling the gaps from the chunk
+            const autoLockWords = async (picks, chunk) => {
+                const need = room.meta.wordCount;
+                let final = (picks || []).slice(0, need);
+                if (final.length < need) {
+                    const have = new Set(final.map(p => p.w.toLowerCase()));
+                    final = [...final, ...mpShuffle(chunk.filter(w => !have.has(w.w.toLowerCase())), Math.random).slice(0, need - final.length)];
+                }
+                if (!final.length) return;
+                setMyPicks(final);
+                try {
+                    await FB.dbSet(rr(`rooms/${roomCode}/words/${uid}`), final);
+                    await FB.dbUpdate(rr(`rooms/${roomCode}/players/${uid}`), { ready: true });
+                } catch (e) { console.error(e); }
+            };
+
+            // public directory + invites
+            const goPublic = async () => {
+                try {
+                    const snap = await FB.dbGet(rr(`users/${uid}`));
+                    if (snap.exists()) await FB.dbUpdate(rr(`users/${uid}`), { name: myName, photo: myPhoto, online: true, lastSeen: Date.now() });
+                    else await FB.dbSet(rr(`users/${uid}`), { name: myName, photo: myPhoto, online: true, lastSeen: Date.now(), points: 0, played: 0, wins: 0, losses: 0, joinedAt: Date.now() });
+                    triggerToast('You are now listed in the public players list.');
+                } catch (e) { console.error(e); triggerToast('Could not join the list — re-publish the database rules.'); }
+            };
+            const leavePublic = async () => { try { await FB.dbRemove(rr(`users/${uid}`)); } catch (e) { console.error(e); } };
+            const sendInvite = async (target) => {
+                if (!roomCode) return;
+                try {
+                    await FB.dbSet(rr(`invites/${target.id}/${uid}`), { from: myName, photo: myPhoto, code: roomCode, at: Date.now() });
+                    triggerToast(`Invite sent to ${target.name}.`);
+                } catch (e) { console.error(e); triggerToast('Could not send the invite.'); }
+            };
+            const dismissInvite = (fromUid) => { FB.dbRemove(rr(`invites/${uid}/${fromUid}`)).catch(() => {}); };
+            const acceptInvite = async (fromUid, code) => {
+                if (roomCode) { triggerToast('Leave your current room first.'); return; }
+                await joinRoom(code);
+                dismissInvite(fromUid);
+            };
+            // points + win/loss record, once per finished game (only if I'm in the public list)
+            const awardResults = async (ranking, round) => {
+                if (!uid || !rtdb) return;
+                const key = `mp_award_${roomCode}_${round}`;
+                try { if (sessionStorage.getItem(key)) return; sessionStorage.setItem(key, '1'); } catch (e) {}
+                const me = ranking.find(r => r.uid === uid);
+                if (!me) return;
+                try {
+                    const snap = await FB.dbGet(rr(`users/${uid}`));
+                    if (!snap.exists()) return;
+                    const cur = snap.val();
+                    const multi = ranking.length >= 2;
+                    const win = multi && me.rank === 1;
+                    const pts = me.score * 10 + (win ? 30 : 0) + 5;
+                    await FB.dbUpdate(rr(`users/${uid}`), {
+                        points: (cur.points || 0) + pts, played: (cur.played || 0) + 1,
+                        wins: (cur.wins || 0) + (win ? 1 : 0), losses: (cur.losses || 0) + (multi && !win ? 1 : 0),
+                    });
+                    triggerToast(`+${pts} points added to the leaderboard!`);
+                } catch (e) { console.error(e); }
+            };
+
             const playAgain = async () => {
                 try {
                     await FB.dbUpdate(rr(`rooms/${roomCode}/meta`), {
-                        status: 'lobby', round: (room.meta.round || 1) + 1, startAt: null, endAt: null,
+                        status: 'lobby', round: (room.meta.round || 1) + 1, startAt: null, endAt: null, studyEndAt: null,
                     });
                 } catch (e) { triggerToast('Could not reset the room.'); }
             };
@@ -3641,6 +3918,19 @@
 
             // ---------------- home (no room yet) ----------------
             if (!roomCode) {
+                const liveInvites = Object.entries(invites || {}).map(([id, v]) => ({ id, ...v })).filter(v => v && v.code && Date.now() - (v.at || 0) < 30 * 60 * 1000);
+                const usersList = Object.entries(usersMap || {}).map(([id, u]) => ({ id, ...u }));
+                const joinCta = isPublic ? (
+                    <div className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs">
+                        <span className="font-bold text-emerald-700">✅ You're on the public list — others can see and invite you.</span>
+                        <button onClick={leavePublic} className="underline text-emerald-700/70 font-bold shrink-0">Hide me</button>
+                    </div>
+                ) : (
+                    <div className="rounded-xl bg-indigo-50 border border-indigo-200 px-3 py-3 text-xs flex items-center justify-between gap-3 flex-wrap">
+                        <span className="font-semibold text-indigo-800">Join the public list to appear here, earn leaderboard points and receive invites. Only your name and photo are shared.</span>
+                        <button onClick={goPublic} className="px-4 py-2 rounded-lg bg-indigo-600 text-white font-bold hover:bg-indigo-700">Make me visible</button>
+                    </div>
+                );
                 const perPlayer = mode === 'swap' ? `Each player puts in ${wordCount} words; with 4 players that's ${wordCount * 3} questions each.` : `${wordCount} questions, same for everybody.`;
                 return shell(<>{header}
                     {connWaited && !conn && (
@@ -3648,7 +3938,74 @@
                             <b>Can't reach the Realtime Database.</b> In the Firebase console open <b>Build → Realtime Database → Create database</b>, then check that the database URL in the Firebase section at the top of this file matches the one shown there.
                         </div>
                     )}
-                    <div className="grid md:grid-cols-[1.4fr_1fr] gap-4">
+                    {liveInvites.length > 0 && (
+                        <div className="space-y-2">
+                            {liveInvites.map(iv => (
+                                <div key={iv.id} className="flex items-center gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+                                    <MpAvatar name={iv.from} photo={iv.photo} />
+                                    <div className="flex-1 min-w-0 text-sm text-slate-700"><b>{iv.from}</b> invited you to room <b className="tracking-widest">{iv.code}</b></div>
+                                    <button onClick={() => acceptInvite(iv.id, iv.code)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700">Join</button>
+                                    <button onClick={() => dismissInvite(iv.id)} className="px-2 py-2 text-slate-400 hover:text-slate-600 text-sm font-bold" aria-label="Dismiss">✕</button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    <div className="flex gap-1.5 flex-wrap">
+                        {[['play', '🎮 Play'], ['players', `👥 Players (${usersList.length})`], ['board', '🏆 Leaderboard']].map(([k, l]) => (
+                            <button key={k} onClick={() => setView(k)} className={`px-4 py-2 rounded-xl text-xs font-extrabold border transition-all ${view === k ? 'bg-indigo-600 text-white border-indigo-600 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>{l}</button>
+                        ))}
+                    </div>
+                    {view === 'players' && (
+                        <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="text-sm font-black text-slate-800 mr-auto">👥 Public players <span className="text-slate-400 font-bold">· {usersList.length} registered · {usersList.filter(u => u.online).length} online</span></h3>
+                                <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search players…" className="px-3 py-2 rounded-lg border border-slate-300 text-xs w-44" />
+                            </div>
+                            {joinCta}
+                            {!roomCode && <p className="text-[11px] text-slate-400">To invite someone, first create a room on the Play tab — then come back here and press Invite.</p>}
+                            <div className="divide-y divide-slate-100 max-h-[32rem] overflow-y-auto">
+                                {usersList.filter(u => !userSearch.trim() || String(u.name || '').toLowerCase().includes(userSearch.trim().toLowerCase()))
+                                    .sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0) || (b.points || 0) - (a.points || 0)).map(u => (
+                                    <div key={u.id} className="flex items-center gap-3 py-2.5">
+                                        <div className="relative"><MpAvatar name={u.name} photo={u.photo} /><span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${u.online ? 'bg-emerald-500' : 'bg-slate-300'}`} /></div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-sm font-extrabold text-slate-800 truncate">{u.name}{u.id === uid ? ' (you)' : ''}</div>
+                                            <div className="text-[11px] font-semibold text-slate-400">{u.points || 0} pts · {u.wins || 0}W {u.losses || 0}L · {u.played || 0} played</div>
+                                        </div>
+                                        {u.id !== uid && (
+                                            <button onClick={() => sendInvite(u)} disabled={!roomCode} title={roomCode ? 'Invite to my room' : 'Create a room first'} className="px-3 py-1.5 rounded-lg bg-indigo-100 text-indigo-700 text-xs font-bold hover:bg-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed">✉ Invite</button>
+                                        )}
+                                    </div>
+                                ))}
+                                {usersList.length === 0 && <div className="py-8 text-center text-xs text-slate-400">Nobody has joined the public list yet — be the first!</div>}
+                            </div>
+                        </div>
+                    )}
+                    {view === 'board' && (() => {
+                        const ranked = usersList.slice().sort((a, b) => (b.points || 0) - (a.points || 0) || (b.wins || 0) - (a.wins || 0));
+                        const medal = { 0: '🥇', 1: '🥈', 2: '🥉' };
+                        return (
+                            <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
+                                <h3 className="text-sm font-black text-slate-800">🏆 Leaderboard <span className="text-slate-400 font-bold">· points from multiplayer games (10 per correct answer, +30 win bonus)</span></h3>
+                                {joinCta}
+                                <div className="divide-y divide-slate-100 max-h-[32rem] overflow-y-auto">
+                                    {ranked.slice(0, 50).map((u, i) => (
+                                        <div key={u.id} className={`flex items-center gap-3 py-2.5 px-2 rounded-lg ${u.id === uid ? 'bg-indigo-50' : ''}`}>
+                                            <div className="w-8 text-center text-sm font-black text-slate-500">{medal[i] || i + 1}</div>
+                                            <MpAvatar name={u.name} photo={u.photo} />
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-sm font-extrabold text-slate-800 truncate">{u.name}{u.id === uid ? ' (you)' : ''}</div>
+                                                <div className="text-[11px] font-semibold text-slate-400">{u.wins || 0} wins · {u.losses || 0} losses · {u.played || 0} games</div>
+                                            </div>
+                                            <div className="text-right"><div className="text-base font-black text-slate-800">{u.points || 0}</div><div className="text-[10px] font-bold text-slate-400">POINTS</div></div>
+                                        </div>
+                                    ))}
+                                    {ranked.length === 0 && <div className="py-8 text-center text-xs text-slate-400">No one on the board yet. Join the public list and play a game!</div>}
+                                </div>
+                            </div>
+                        );
+                    })()}
+                    <div className={`grid md:grid-cols-[1.4fr_1fr] gap-4 ${view === 'play' ? '' : 'hidden'}`}>
                         <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
                             <h3 className="text-sm font-black text-slate-800">➕ Create a room</h3>
                             <div className="grid sm:grid-cols-2 gap-2">
@@ -3658,6 +4015,27 @@
                                         <div className="text-[11px] text-slate-500 mt-0.5 leading-snug">{m.desc}</div>
                                     </button>
                                 ))}
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2.5">
+                                <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">📚 Material (optional)</div>
+                                <div className="grid sm:grid-cols-2 gap-2">
+                                    <select value={bookId} onChange={(e) => setBookId(e.target.value)} className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 bg-white">
+                                        {books.map(b => <option key={b.id} value={b.id}>{b.name} ({(allWords[b.id] || []).length})</option>)}
+                                    </select>
+                                    <select value={chunkIdx} onChange={(e) => setChunkIdx(Number(e.target.value))} className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 bg-white">
+                                        <option value={-1}>Any words (no chunk)</option>
+                                        {createChunks.map(c => <option key={c.index} value={c.index}>{c.label} · {c.words.length} words</option>)}
+                                    </select>
+                                </div>
+                                {chunkIdx >= 0 ? (
+                                    <div>
+                                        <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-400"><span>Study time before the game</span><span className="text-indigo-600">{studySec === 0 ? 'Off' : mpFmtClock(studySec * 1000)}</span></div>
+                                        <input type="range" min="0" max="300" step="15" value={studySec} onChange={(e) => setStudySec(Number(e.target.value))} className="w-full accent-indigo-600" />
+                                        <p className="text-[11px] text-slate-400">{studySec > 0 ? 'Everyone reads this chunk (and picks their words) for that long — then the game starts by itself. Questions and wrong options come only from the chunk.' : 'No study time: words are picked from the chunk in the lobby and the game starts when everyone is ready.'}</p>
+                                    </div>
+                                ) : (
+                                    <p className="text-[11px] text-slate-400">Pick a chunk to give everyone the same material to study — or leave it and players choose words from any of their lists.</p>
+                                )}
                             </div>
                             <div>
                                 <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-1.5">Question style</div>
@@ -3670,7 +4048,7 @@
                             <div className="grid sm:grid-cols-2 gap-4">
                                 <div>
                                     <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-400"><span>{mode === 'swap' ? 'Words per player' : 'Number of words'}</span><span className="text-indigo-600">{wordCount}</span></div>
-                                    <input type="range" min="3" max="30" value={wordCount} onChange={(e) => setWordCount(Number(e.target.value))} className="w-full accent-indigo-600" />
+                                    <input type="range" min="3" max={maxWords} value={wordCount} onChange={(e) => setWordCount(Number(e.target.value))} className="w-full accent-indigo-600" />
                                 </div>
                                 <div>
                                     <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-400"><span>Time limit</span><span className="text-indigo-600">{mpFmtClock(timeLimit * 1000)}</span></div>
@@ -3708,13 +4086,29 @@
             const onlinePlayers = playerList.filter(p => p.online !== false);
             const hostWordsLocked = Object.values((room.words && room.words[meta.hostUid]) || {}).length === meta.wordCount;
             const everyoneReady = meta.mode === 'same' ? hostWordsLocked : onlinePlayers.every(p => p.ready);
-            const canStart = isHost && onlinePlayers.length >= 2 && everyoneReady;
+            const chunkWords = Object.values(room.chunk || {});
+            const studyFirst = chunkWords.length > 0 && (meta.studySec || 0) > 0;
+            const canStart = isHost && onlinePlayers.length >= 2 && (studyFirst || everyoneReady);
             const styleLabel = (MP_STYLES.find(s => s.id === meta.style) || {}).label || 'Mixed';
             const modeInfo = MP_MODES.find(m => m.id === meta.mode) || MP_MODES[0];
 
             if (meta.status === 'playing' && meta.startAt && meta.endAt) {
                 return shell(<>{header}
-                    <MpPlay key={`${roomCode}-${meta.round}`} code={roomCode} room={room} uid={uid} serverNow={serverNow} onUpdateMe={updateMe} onPlayAgain={playAgain} onLeave={leaveRoom} isHost={isHost} />
+                    <MpPlay key={`${roomCode}-${meta.round}`} code={roomCode} room={room} uid={uid} serverNow={serverNow} onUpdateMe={updateMe} onPlayAgain={playAgain} onLeave={leaveRoom} isHost={isHost} onResults={(rk) => awardResults(rk, meta.round)} />
+                </>);
+            }
+
+            if (meta.status === 'study' && meta.studyEndAt) {
+                return shell(<>{header}
+                    <MpStudy
+                        key={`study-${roomCode}-${meta.round}`}
+                        room={room} isHost={isHost} serverNow={serverNow}
+                        canPick={meta.mode === 'swap' || isHost}
+                        myPicks={myPicks} setMyPicks={setMyPicks}
+                        iAmLocked={iAmLocked} lockedWords={lockedWords}
+                        onAutoLock={autoLockWords} onLock={lockWords} onUnlock={unlockWords}
+                        onStartGame={startGame} onSkip={skipStudy} onLeave={leaveRoom}
+                    />
                 </>);
             }
 
@@ -3730,6 +4124,7 @@
                         <div><b>{modeInfo.icon} {modeInfo.label}</b> · {styleLabel}</div>
                         <div>{meta.wordCount} {meta.mode === 'swap' ? 'words per player' : 'words'} · {mpFmtClock(meta.timeLimit * 1000)} on the clock</div>
                         <div>Host: {meta.hostName}</div>
+                        {meta.chunkLabel && <div>📚 {meta.bookName ? `${meta.bookName} · ` : ''}{meta.chunkLabel}{(meta.studySec || 0) > 0 ? ` · ${mpFmtClock(meta.studySec * 1000)} study` : ''}</div>}
                     </div>
                 </div>
                 {!hostOnline && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 font-semibold">The host went offline. If they don't come back, leave and create a new room.</div>}
@@ -3753,7 +4148,13 @@
                         </div>
                     </div>
                     <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
-                        {meta.mode === 'swap' || isHost ? (
+                        {studyFirst ? (
+                            <div className="text-center py-8 space-y-2">
+                                <div className="text-4xl">📖</div>
+                                <p className="text-sm font-black text-slate-800">Study phase comes first</p>
+                                <p className="text-xs text-slate-500 max-w-sm mx-auto">{meta.bookName ? `${meta.bookName} · ` : ''}{meta.chunkLabel} · {chunkWords.length} words. When the host starts, everyone gets {mpFmtClock(meta.studySec * 1000)} to read the chunk{meta.mode === 'swap' ? ' and pick the words the others will face' : (isHost ? ' and pick the words for the game' : ' while the host picks the words')}. The game then begins automatically.</p>
+                            </div>
+                        ) : meta.mode === 'swap' || isHost ? (
                             <>
                                 <div className="flex items-center justify-between gap-2 flex-wrap">
                                     <h3 className="text-sm font-black text-slate-800">{meta.mode === 'swap' ? 'Pick the words others will face' : 'Pick the words for everyone'}</h3>
@@ -3768,7 +4169,7 @@
                                     </div>
                                 ) : (
                                     <>
-                                        <MpWordPicker books={books} allWords={allWords} defaultBookId={activeBookId} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={false} />
+                                        {chunkWords.length > 0 ? <MpChunkPicker chunk={chunkWords} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={false} /> : <MpWordPicker books={books} allWords={allWords} defaultBookId={activeBookId} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={false} />}
                                         <button onClick={lockWords} disabled={myPicks.length !== meta.wordCount} className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-40">🔒 Lock in my words</button>
                                     </>
                                 )}
@@ -3784,8 +4185,8 @@
                 </div>
                 <div className="flex gap-2 flex-wrap">
                     {isHost ? (
-                        <button onClick={startGame} disabled={!canStart} className="flex-1 min-w-[180px] py-3.5 rounded-xl bg-emerald-600 text-white font-black text-sm hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed">
-                            {canStart ? '🚀 Start game' : (onlinePlayers.length < 2 ? 'Waiting for at least 2 players…' : 'Waiting for everyone to be ready…')}
+                        <button onClick={studyFirst ? startStudy : startGame} disabled={!canStart} className="flex-1 min-w-[180px] py-3.5 rounded-xl bg-emerald-600 text-white font-black text-sm hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed">
+                            {canStart ? (studyFirst ? '📖 Start study phase' : '🚀 Start game') : (onlinePlayers.length < 2 ? 'Waiting for at least 2 players…' : 'Waiting for everyone to be ready…')}
                         </button>
                     ) : (
                         <div className="flex-1 min-w-[180px] py-3.5 rounded-xl bg-slate-100 text-slate-500 font-bold text-xs text-center">Waiting for the host to start…</div>
@@ -8580,6 +8981,7 @@ Rules:
                                 allWords={allWords}
                                 activeBookId={activeBook.id}
                                 triggerToast={triggerToast}
+                                chunkSize={chunkSize}
                             />
                         </div>
                     )}
