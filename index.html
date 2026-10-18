@@ -25,6 +25,10 @@
         import {
             getFirestore, doc, getDoc, setDoc, collection, getDocs, writeBatch
         } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+        import {
+            getDatabase, ref as dbRef, set as dbSet, update as dbUpdate, remove as dbRemove,
+            onValue as dbOnValue, get as dbGet, onDisconnect as dbOnDisconnect
+        } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-database.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBJDyyE1hE-hpnjvQ6bdaXt2byKcHCy1G8",
@@ -40,7 +44,17 @@
         const provider = new GoogleAuthProvider();
         const db = getFirestore(fbApp);
 
-        window.FB = { auth, provider, db, signInWithPopup, signOut, onAuthStateChanged, doc, getDoc, setDoc, collection, getDocs, writeBatch };
+        // Realtime Database — used ONLY by the Multiplayer tab (live rooms).
+        // If your Realtime Database lives in a non-default region, Firebase
+        // console > Realtime Database shows its exact URL; paste it here.
+        const RTDB_URL = "https://vocab-app-7c6dd-default-rtdb.firebaseio.com";
+        let rtdb = null;
+        try { rtdb = getDatabase(fbApp, RTDB_URL); } catch (e) { console.error('Realtime Database unavailable:', e); }
+
+        window.FB = {
+            auth, provider, db, signInWithPopup, signOut, onAuthStateChanged, doc, getDoc, setDoc, collection, getDocs, writeBatch,
+            rtdb, dbRef, dbSet, dbUpdate, dbRemove, dbOnValue, dbGet, dbOnDisconnect
+        };
         window.dispatchEvent(new Event('fb-ready'));
     </script>
     <!-- FontAwesome Icons -->
@@ -1701,7 +1715,7 @@
             };
         })();
 
-        function ModernVocabGame({ userXP = 0, userLevel = 1, wordPool, showBangla, triggerToast, onVictoryXP, appTheme, onThemeChange, shortcuts, globalSound, speechAccent = 'us', fieldVisibility = DEFAULT_FIELD_VISIBILITY, familiarityMap = null, onSetFamiliarity = null, onGameFinished = null, onReviewMissed = null, reviewActive = false, reviewCount = 0, onExitReview = null, mistakeBankCount = 0, onOpenMistakeBank = null }) {
+        function ModernVocabGame({ userXP = 0, userLevel = 1, streak = 0, todayLearned = 0, dailyGoal = 10, wordPool, showBangla, triggerToast, onVictoryXP, appTheme, onThemeChange, shortcuts, globalSound, speechAccent = 'us', fieldVisibility = DEFAULT_FIELD_VISIBILITY, familiarityMap = null, onSetFamiliarity = null, onGameFinished = null, onReviewMissed = null, reviewActive = false, reviewCount = 0, onExitReview = null, mistakeBankCount = 0, onOpenMistakeBank = null }) {
             const [gameMode, setGameMode] = useState('menu'); // 'menu','classic','speed','match','fillin','truefalse','synant'
             const [gameState, setGameState] = useState('idle'); // 'idle','playing','summary','paused'
             const [score, setScore] = useState(0);
@@ -2389,26 +2403,40 @@
                     {!isImmersive && (
                         <div className="flex items-center justify-between flex-wrap gap-3">
                             <h2 className={`text-xl font-black flex items-center gap-2 ${appTheme === 'light' ? 'text-slate-800' : 'text-white'}`}>🎮 Word Quest</h2>
-                            {/* Compact level badge: a ring showing progress to the next level,
-                                with the level number inside — replaces the old oversized
-                                "LEVEL X LEARNER" text box. */}
-                            <div
-                                className={`flex items-center gap-2 rounded-full pl-1.5 pr-3 py-1 border ${appTheme === 'light' ? 'bg-white border-slate-200 shadow-sm' : 'bg-white/5 border-white/15'}`}
-                                title={`${userXP} total XP earned`}
-                            >
-                                <div
-                                    className="relative w-8 h-8 rounded-full shrink-0"
-                                    style={{ background: `conic-gradient(#f59e0b ${userXP % 100}%, ${appTheme === 'light' ? '#e2e8f0' : 'rgba(255,255,255,0.15)'} 0)` }}
-                                >
-                                    <div className={`absolute inset-[2.5px] rounded-full flex items-center justify-center text-[11px] font-black ${appTheme === 'light' ? 'bg-white text-amber-600' : 'bg-slate-900 text-amber-300'}`}>
-                                        {userLevel}
+                            {/* Streak + Daily Goal card — replaces the old Level/XP badge.
+                                Left: a flame with the current day-streak. Right: today's
+                                word goal with a progress bar. */}
+                            {(() => {
+                                const goal = Math.max(1, dailyGoal || 1);
+                                const done = Math.max(0, todayLearned || 0);
+                                const pct = Math.min(100, Math.round((done / goal) * 100));
+                                const reached = done >= goal;
+                                const light = appTheme === 'light';
+                                return (
+                                    <div
+                                        className={`flex items-stretch rounded-2xl overflow-hidden border min-w-[250px] ${light ? 'bg-white border-slate-200 shadow-sm' : 'bg-white/5 border-white/15'}`}
+                                        title={`${streak || 0}-day streak · ${done}/${goal} words today`}
+                                    >
+                                        <div className={`flex flex-col items-center justify-center px-3.5 py-2 ${streak > 0 ? 'bg-gradient-to-b from-orange-400 to-rose-500 text-white' : (light ? 'bg-slate-100 text-slate-400' : 'bg-white/10 text-white/40')}`}>
+                                            <span className="text-lg leading-none">🔥</span>
+                                            <span className="text-base font-black leading-none mt-1">{streak || 0}</span>
+                                            <span className="text-[8px] font-extrabold uppercase tracking-widest opacity-90 mt-0.5">day{streak === 1 ? '' : 's'}</span>
+                                        </div>
+                                        <div className="flex-1 px-3 py-2 flex flex-col justify-center gap-1.5">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <span className={`text-[10px] font-extrabold uppercase tracking-wider ${light ? 'text-slate-500' : 'text-white/60'}`}>Today's goal</span>
+                                                <span className={`text-[11px] font-black ${reached ? 'text-emerald-500' : (light ? 'text-slate-700' : 'text-white')}`}>{done}/{goal} words</span>
+                                            </div>
+                                            <div className={`h-2 rounded-full overflow-hidden ${light ? 'bg-slate-200' : 'bg-white/15'}`}>
+                                                <div className={`h-full rounded-full transition-all duration-500 ${reached ? 'bg-emerald-500' : 'bg-gradient-to-r from-amber-400 to-orange-500'}`} style={{ width: `${pct}%` }} />
+                                            </div>
+                                            <span className={`text-[10px] font-semibold ${light ? 'text-slate-400' : 'text-white/45'}`}>
+                                                {reached ? '🎉 Goal reached — keep the flame alive!' : `${goal - done} more to hit today's goal`}
+                                            </span>
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="leading-tight">
-                                    <div className={`text-[10px] font-extrabold uppercase tracking-wider ${appTheme === 'light' ? 'text-slate-500' : 'text-white/60'}`}>Level {userLevel}</div>
-                                    <div className={`text-[10px] ${appTheme === 'light' ? 'text-slate-400' : 'text-white/40'}`}>{userXP % 100}/100 XP</div>
-                                </div>
-                            </div>
+                                );
+                            })()}
                             <FocusControls />
                         </div>
                     )}
@@ -2951,6 +2979,820 @@
                 }
                 return this.props.children;
             }
+        }
+
+        // ============================================================
+        // MULTIPLAYER ARENA
+        // Live rooms on Firebase Realtime Database. Everything is client-side:
+        // GitHub Pages serves this file, Firebase keeps every player's screen in
+        // sync. Data layout (all under rooms/<CODE>):
+        //   meta    { hostUid, hostName, mode, style, wordCount, timeLimit, status, round, startAt, endAt }
+        //   players { <uid>: { name, photo, online, ready, score, answered, done, finishedMs } }
+        //   words   { <uid>: [ { w, m, b, e, s, a } ... ] }   (slim copies of the words a player put in)
+        // ============================================================
+        const MP_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+        const MP_MAX_PLAYERS = 10;
+        const MP_STYLES = [
+            { id: 'mixed', label: 'Mixed', desc: 'A bit of everything' },
+            { id: 'meaning', label: 'Classic', desc: 'See the word, pick the meaning' },
+            { id: 'word', label: 'Reverse', desc: 'See the meaning, pick the word' },
+            { id: 'fill', label: 'Fill in the Blank', desc: 'Complete the sentence' },
+            { id: 'synant', label: 'Synonym / Antonym', desc: 'Pick the synonym or opposite' },
+        ];
+        const MP_MODES = [
+            { id: 'swap', icon: '🔀', label: 'Word Swap', desc: 'Everyone picks words from their own list. You face everybody else\'s words.' },
+            { id: 'same', icon: '🏁', label: 'Same Words', desc: 'The host picks the words and everyone races through the same set.' },
+        ];
+
+        function mpMakeCode() {
+            let c = '';
+            for (let i = 0; i < 5; i++) c += MP_CODE_ALPHABET[Math.floor(Math.random() * MP_CODE_ALPHABET.length)];
+            return c;
+        }
+        function mpHash(str) {
+            let h = 1779033703 ^ str.length;
+            for (let i = 0; i < str.length; i++) {
+                h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+                h = (h << 13) | (h >>> 19);
+            }
+            return (h ^ (h >>> 16)) >>> 0;
+        }
+        function mpRng(seedStr) {
+            let a = mpHash(seedStr);
+            return function () {
+                a |= 0; a = (a + 0x6D2B79F5) | 0;
+                let t = Math.imul(a ^ (a >>> 15), 1 | a);
+                t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+                return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+        }
+        function mpShuffle(arr, rnd) {
+            const a = arr.slice();
+            for (let i = a.length - 1; i > 0; i--) {
+                const j = Math.floor(rnd() * (i + 1));
+                [a[i], a[j]] = [a[j], a[i]];
+            }
+            return a;
+        }
+        const mpEscapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+        // Small copy of a word: only what the game needs, so room data stays tiny.
+        function mpSlimWord(w) {
+            const names = (list) => (Array.isArray(list) ? list : [])
+                .map(x => (typeof x === 'string' ? x : (x && (x.word || x.text)) || ''))
+                .map(x => String(x).trim().slice(0, 70)).filter(Boolean).slice(0, 3);
+            // Lengths are capped to stay inside the database security rules.
+            return {
+                w: String(w.word || '').trim().slice(0, 70),
+                m: String(w.meaning_en || w.meaning || '').trim().slice(0, 350),
+                b: String(w.meaning_bn || w.bangla || '').trim().slice(0, 350),
+                e: String(w.example_main || w.sentence || '').trim().slice(0, 450),
+                s: names(w.synonyms),
+                a: names(w.antonyms),
+            };
+        }
+
+        // Turns a pool of slim words into multiple-choice questions. Seeded, so the
+        // same player always gets the same questions/options on every re-render.
+        function mpBuildQuestions(pool, style, seedStr) {
+            const rnd = mpRng(seedStr);
+            const items = mpShuffle((pool || []).filter(p => p && p.w), rnd);
+            const types = ['meaning', 'word', 'fill', 'synant'];
+            const out = [];
+            const pickDistractors = (cands, exclude, n) => {
+                const seen = new Set(exclude.map(x => String(x).toLowerCase()));
+                const uniq = [];
+                mpShuffle(cands, rnd).forEach(c => {
+                    const k = String(c || '').trim();
+                    if (!k || seen.has(k.toLowerCase())) return;
+                    seen.add(k.toLowerCase());
+                    uniq.push(k);
+                });
+                return uniq.slice(0, n);
+            };
+            items.forEach((p, i) => {
+                const others = items.filter(o => o !== p);
+                const syn = (p.s || []).filter(Boolean);
+                const ant = (p.a || []).filter(Boolean);
+                const canFill = !!p.e && new RegExp(mpEscapeRe(p.w), 'i').test(p.e);
+                let type = style === 'mixed' ? types[i % types.length] : style;
+                if (type === 'fill' && !canFill) type = 'meaning';
+                if (type === 'synant' && !syn.length && !ant.length) type = 'meaning';
+                if ((type === 'meaning' || type === 'word') && !p.m) {
+                    if (canFill) type = 'fill'; else return;
+                }
+                let prompt, sub, answer, distractors;
+                if (type === 'meaning') {
+                    prompt = p.w; sub = 'What does it mean?'; answer = p.m;
+                    distractors = pickDistractors(others.map(o => o.m), [answer], 3);
+                } else if (type === 'word') {
+                    prompt = p.m; sub = 'Which word matches this meaning?'; answer = p.w;
+                    distractors = pickDistractors(others.map(o => o.w), [answer], 3);
+                } else if (type === 'fill') {
+                    prompt = p.e.replace(new RegExp(mpEscapeRe(p.w), 'i'), '_____'); sub = 'Which word fits the blank?'; answer = p.w;
+                    distractors = pickDistractors(others.map(o => o.w), [answer], 3);
+                } else {
+                    const useAnt = ant.length && (!syn.length || rnd() < 0.5);
+                    const src = useAnt ? ant : syn;
+                    answer = src[Math.floor(rnd() * src.length)];
+                    prompt = p.w; sub = useAnt ? 'Pick the OPPOSITE (antonym)' : 'Pick the SYNONYM';
+                    distractors = pickDistractors(others.map(o => o.w), [answer, p.w, ...syn, ...ant], 3);
+                }
+                const options = mpShuffle([answer, ...distractors], rnd);
+                if (options.length < 2) return;
+                out.push({ id: out.length, type, prompt, sub, options, answer });
+            });
+            return out;
+        }
+
+        function mpRank(players, limitMs) {
+            const rows = Object.entries(players || {}).map(([uid, p]) => ({
+                uid, name: p.name || 'Player', photo: p.photo || '', score: p.score || 0, answered: p.answered || 0,
+                finishedMs: typeof p.finishedMs === 'number' ? p.finishedMs : limitMs + 1, done: !!p.done, online: p.online !== false,
+            }));
+            rows.sort((a, b) => (b.score - a.score) || (a.finishedMs - b.finishedMs) || a.name.localeCompare(b.name));
+            let rank = 0;
+            rows.forEach((r, i) => {
+                const prev = rows[i - 1];
+                if (!prev || prev.score !== r.score || prev.finishedMs !== r.finishedMs) rank = i + 1;
+                r.rank = rank;
+            });
+            return rows;
+        }
+        const mpOrdinal = (n) => ({ 1: '1st', 2: '2nd', 3: '3rd' }[n] || `${n}th`);
+        const mpFmtClock = (ms) => {
+            const s = Math.max(0, Math.ceil(ms / 1000));
+            return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        };
+        const mpFmtTime = (ms) => `${(ms / 1000).toFixed(1)}s`;
+
+        function MpAvatar({ name, photo, size = 32 }) {
+            const colors = ['bg-indigo-500', 'bg-rose-500', 'bg-emerald-500', 'bg-amber-500', 'bg-sky-500', 'bg-fuchsia-500', 'bg-teal-500', 'bg-orange-500'];
+            const c = colors[mpHash(String(name || '?')) % colors.length];
+            if (photo) return <img src={photo} alt="" referrerPolicy="no-referrer" style={{ width: size, height: size }} className="rounded-full object-cover shrink-0" />;
+            return (
+                <div style={{ width: size, height: size, fontSize: size * 0.42 }} className={`${c} text-white rounded-full flex items-center justify-center font-black shrink-0`}>
+                    {String(name || '?').trim().charAt(0).toUpperCase()}
+                </div>
+            );
+        }
+
+        // ---------- The in-game screen (countdown -> questions -> results) ----------
+        function MpPlay({ code, room, uid, serverNow, onUpdateMe, onPlayAgain, onLeave, isHost }) {
+            const meta = room.meta;
+            const limitMs = (meta.timeLimit || 60) * 1000;
+            const startAt = meta.startAt;
+            const endAt = meta.endAt;
+
+            const pool = useMemo(() => {
+                const words = room.words || {};
+                const out = [];
+                if (meta.mode === 'same') {
+                    Object.values(words[meta.hostUid] || {}).forEach(w => out.push(w));
+                } else {
+                    Object.keys(words).forEach(owner => {
+                        if (owner === uid) return;
+                        Object.values(words[owner] || {}).forEach(w => out.push(w));
+                    });
+                }
+                return out;
+            }, [meta.mode, meta.hostUid, uid, JSON.stringify(room.words || {})]);
+
+            const questions = useMemo(
+                () => mpBuildQuestions(pool, meta.style || 'mixed', `${code}-${meta.round}-${uid}`),
+                [pool, meta.style, meta.round, code, uid]
+            );
+
+            const [now, setNow] = useState(serverNow());
+            const [idx, setIdx] = useState(0);
+            const [score, setScore] = useState(0);
+            const [picked, setPicked] = useState(null);
+            const doneRef = useRef(false);
+            const advanceRef = useRef(null);
+
+            useEffect(() => {
+                const t = setInterval(() => setNow(serverNow()), 250);
+                return () => { clearInterval(t); if (advanceRef.current) clearTimeout(advanceRef.current); };
+            }, []);
+
+            const started = now >= startAt;
+            const finishedAll = idx >= questions.length;
+            const timeUp = now >= endAt;
+
+            useEffect(() => {
+                if (doneRef.current || !started) return;
+                if (!(finishedAll || timeUp)) return;
+                doneRef.current = true;
+                const finishedMs = finishedAll ? Math.max(0, Math.min(now, endAt) - startAt) : limitMs;
+                onUpdateMe({ score, answered: idx, done: true, finishedMs });
+            }, [now, idx, started]);
+
+            const answer = (opt) => {
+                if (picked !== null || timeUp || finishedAll || !started) return;
+                const q = questions[idx];
+                const right = opt === q.answer;
+                const newScore = right ? score + 1 : score;
+                setPicked(opt);
+                if (right) setScore(newScore);
+                onUpdateMe({ score: newScore, answered: idx + 1 });
+                advanceRef.current = setTimeout(() => { setPicked(null); setIdx(i => i + 1); }, right ? 450 : 900);
+            };
+
+            const players = room.players || {};
+            const ranking = mpRank(players, limitMs);
+            const onlineRows = ranking.filter(r => r.online);
+            const allDone = onlineRows.length > 0 && onlineRows.every(r => r.done);
+            const resultsReady = started && (allDone || now > endAt + 2500);
+
+            // ---- results ----
+            if (resultsReady) {
+                const total = ranking.length;
+                const podium = ranking.filter(r => r.rank <= 3);
+                const label = (r) => r.rank === 1 ? '🏆 Winner' : (r.rank === 2 ? (total > 2 ? '🥈 Runner-up' : 'Lost') : (r.rank === 3 ? '🥉 Third' : `${mpOrdinal(r.rank)} place`));
+                const medal = { 1: '🥇', 2: '🥈', 3: '🥉' };
+                return (
+                    <div className="space-y-5">
+                        <div className="rounded-3xl p-6 text-center bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 text-white shadow-xl">
+                            <div className="text-xs font-bold uppercase tracking-widest opacity-80">Game over</div>
+                            <h3 className="text-2xl font-black mt-1">Final standings</h3>
+                            <div className="flex items-end justify-center gap-3 mt-6 flex-wrap">
+                                {[ranking.find(r => r.rank === 2), ranking.find(r => r.rank === 1), ranking.find(r => r.rank === 3)].filter(Boolean).map(r => (
+                                    <div key={r.uid} className={`flex flex-col items-center rounded-2xl px-4 py-3 bg-white/15 backdrop-blur ${r.rank === 1 ? 'pb-6 scale-110' : ''}`}>
+                                        <div className="text-2xl">{medal[r.rank]}</div>
+                                        <MpAvatar name={r.name} photo={r.photo} size={r.rank === 1 ? 52 : 40} />
+                                        <div className="text-sm font-black mt-1 max-w-[110px] truncate">{r.name}</div>
+                                        <div className="text-xs font-bold opacity-90">{r.score} correct</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="bg-white border border-slate-200 rounded-2xl divide-y divide-slate-100 overflow-hidden">
+                            {ranking.map(r => (
+                                <div key={r.uid} className={`flex items-center gap-3 px-4 py-3 ${r.uid === uid ? 'bg-indigo-50' : ''}`}>
+                                    <div className="w-8 text-center text-sm font-black text-slate-500">{mpOrdinal(r.rank)}</div>
+                                    <MpAvatar name={r.name} photo={r.photo} />
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-extrabold text-slate-800 truncate">{r.name}{r.uid === uid ? ' (you)' : ''}</div>
+                                        <div className="text-[11px] font-semibold text-slate-400">{label(r)}</div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-base font-black text-slate-800">{r.score}<span className="text-xs font-bold text-slate-400"> / {r.answered}</span></div>
+                                        <div className="text-[10px] font-semibold text-slate-400">{r.done && r.finishedMs <= limitMs ? (r.finishedMs >= limitMs ? 'time up' : mpFmtTime(r.finishedMs)) : 'time up'}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                            {isHost ? (
+                                <button onClick={onPlayAgain} className="flex-1 min-w-[160px] py-3 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700">🔁 Play again (back to lobby)</button>
+                            ) : (
+                                <div className="flex-1 min-w-[160px] py-3 rounded-xl bg-slate-100 text-slate-500 font-semibold text-xs text-center">Waiting for the host to start another round…</div>
+                            )}
+                            <button onClick={onLeave} className="px-5 py-3 rounded-xl border border-slate-300 text-slate-600 font-bold text-sm hover:bg-slate-100">Leave room</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            // ---- countdown ----
+            if (!started) {
+                const secs = Math.max(1, Math.ceil((startAt - now) / 1000));
+                return (
+                    <div className="rounded-3xl bg-slate-900 text-white p-12 text-center shadow-xl">
+                        <div className="text-xs font-bold uppercase tracking-widest text-indigo-300">Get ready</div>
+                        <div className="text-8xl font-black mt-3 tabular-nums">{secs}</div>
+                        <div className="text-sm text-slate-400 mt-3">{questions.length} questions · {mpFmtClock(limitMs)} on the clock</div>
+                    </div>
+                );
+            }
+
+            // ---- no questions could be built ----
+            if (questions.length === 0) {
+                return (
+                    <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center">
+                        <div className="text-3xl">🤔</div>
+                        <p className="text-sm font-bold text-slate-700 mt-2">Not enough words to build questions.</p>
+                        <p className="text-xs text-slate-400 mt-1">Words need meanings, and there must be at least two of them.</p>
+                        <button onClick={onLeave} className="mt-4 px-5 py-2 rounded-xl bg-indigo-600 text-white text-sm font-bold">Leave room</button>
+                    </div>
+                );
+            }
+
+            // ---- waiting for others after finishing ----
+            if (finishedAll || timeUp) {
+                return (
+                    <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center">
+                        <div className="text-4xl">{timeUp && !finishedAll ? '⏰' : '✅'}</div>
+                        <h3 className="text-lg font-black text-slate-800 mt-2">{timeUp && !finishedAll ? "Time's up!" : 'All done!'}</h3>
+                        <p className="text-sm text-slate-500 mt-1">You got <b>{score}</b> right. Waiting for the others to finish…</p>
+                        <div className="mt-4 flex justify-center gap-1.5 flex-wrap">
+                            {ranking.map(r => (
+                                <span key={r.uid} className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${r.done || !r.online ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{r.name} {r.done ? '✓' : (r.online ? '…' : '(left)')}</span>
+                            ))}
+                        </div>
+                    </div>
+                );
+            }
+
+            // ---- the question ----
+            const q = questions[idx];
+            const remaining = Math.max(0, endAt - now);
+            const pct = Math.max(0, Math.min(100, (remaining / limitMs) * 100));
+            const urgent = remaining < 10000;
+            return (
+                <div className="grid lg:grid-cols-[1fr_260px] gap-4">
+                    <div className="space-y-3">
+                        <div className="bg-white border border-slate-200 rounded-2xl p-3">
+                            <div className="flex items-center justify-between text-xs font-extrabold">
+                                <span className="text-slate-500">Question {idx + 1} / {questions.length}</span>
+                                <span className={`tabular-nums text-base ${urgent ? 'text-rose-600 animate-pulse' : 'text-slate-800'}`}>⏱ {mpFmtClock(remaining)}</span>
+                                <span className="text-emerald-600">✔ {score}</span>
+                            </div>
+                            <div className="h-2 rounded-full bg-slate-200 mt-2 overflow-hidden">
+                                <div className={`h-full transition-all duration-300 ${urgent ? 'bg-rose-500' : 'bg-indigo-500'}`} style={{ width: `${pct}%` }} />
+                            </div>
+                        </div>
+                        <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+                            <div className="text-[11px] font-extrabold uppercase tracking-widest text-indigo-500">{q.sub}</div>
+                            <div className={`font-black text-slate-900 mt-2 ${q.type === 'meaning' || q.type === 'synant' ? 'text-4xl' : 'text-xl leading-snug'}`}>{q.prompt}</div>
+                            <div className="grid sm:grid-cols-2 gap-2.5 mt-5">
+                                {q.options.map((opt, i) => {
+                                    const isRight = picked !== null && opt === q.answer;
+                                    const isWrong = picked === opt && opt !== q.answer;
+                                    return (
+                                        <button
+                                            key={i}
+                                            disabled={picked !== null}
+                                            onClick={() => answer(opt)}
+                                            className={`text-left px-4 py-3 rounded-xl border-2 text-sm font-bold transition-all ${isRight ? 'bg-emerald-50 border-emerald-500 text-emerald-800' : isWrong ? 'bg-rose-50 border-rose-500 text-rose-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:border-indigo-400 hover:bg-indigo-50'}`}
+                                        >
+                                            <span className="text-slate-400 mr-2">{String.fromCharCode(65 + i)}</span>{opt}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="bg-white border border-slate-200 rounded-2xl p-3 h-fit">
+                        <div className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 mb-2">Live scoreboard</div>
+                        <div className="space-y-1.5">
+                            {ranking.map(r => (
+                                <div key={r.uid} className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${r.uid === uid ? 'bg-indigo-50' : ''} ${r.online ? '' : 'opacity-40'}`}>
+                                    <span className="w-5 text-[11px] font-black text-slate-400">{r.rank}</span>
+                                    <MpAvatar name={r.name} photo={r.photo} size={22} />
+                                    <span className="flex-1 min-w-0 truncate text-xs font-bold text-slate-700">{r.name}</span>
+                                    <span className="text-xs font-black text-slate-800">{r.uid === uid ? score : r.score}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ---------- Word picker used in the lobby ----------
+        function MpWordPicker({ books, allWords, defaultBookId, wordCount, picks, setPicks, locked }) {
+            const [bookId, setBookId] = useState(defaultBookId || (books[0] && books[0].id));
+            const [search, setSearch] = useState('');
+            const list = (allWords[bookId] || []);
+            const keyOf = (w) => String(w.word || '').trim().toLowerCase();
+            const picked = new Set(picks.map(p => p.w.toLowerCase()));
+            const q = search.trim().toLowerCase();
+            const shown = list.filter(w => w.word && (!q || String(w.word).toLowerCase().includes(q))).slice(0, 80);
+            const toggle = (w) => {
+                if (locked) return;
+                const k = keyOf(w);
+                if (picked.has(k)) setPicks(picks.filter(p => p.w.toLowerCase() !== k));
+                else if (picks.length < wordCount) setPicks([...picks, mpSlimWord(w)]);
+            };
+            const randomFill = () => {
+                if (locked) return;
+                const have = new Set(picks.map(p => p.w.toLowerCase()));
+                const candidates = list.filter(w => w.word && !have.has(keyOf(w)) && (w.meaning_en || w.meaning));
+                const rnd = Math.random;
+                const need = wordCount - picks.length;
+                setPicks([...picks, ...mpShuffle(candidates, rnd).slice(0, need).map(mpSlimWord)]);
+            };
+            return (
+                <div className="space-y-2">
+                    <div className="flex gap-2 flex-wrap">
+                        <select value={bookId} onChange={(e) => setBookId(e.target.value)} disabled={locked} className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 bg-white">
+                            {books.map(b => <option key={b.id} value={b.id}>{b.name} ({(allWords[b.id] || []).length})</option>)}
+                        </select>
+                        <input value={search} onChange={(e) => setSearch(e.target.value)} disabled={locked} placeholder="Search words…" className="flex-1 min-w-[120px] px-3 py-2 rounded-lg border border-slate-300 text-xs text-slate-700 bg-white" />
+                        <button onClick={randomFill} disabled={locked || picks.length >= wordCount} className="px-3 py-2 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold hover:bg-amber-200 disabled:opacity-40">🎲 Random fill</button>
+                        <button onClick={() => setPicks([])} disabled={locked || !picks.length} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 disabled:opacity-40">Clear</button>
+                    </div>
+                    <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+                        {shown.length === 0 && <div className="p-4 text-xs text-slate-400 text-center">No words here.</div>}
+                        {shown.map((w, i) => {
+                            const on = picked.has(keyOf(w));
+                            return (
+                                <button key={`${w.id}-${i}`} onClick={() => toggle(w)} disabled={locked || (!on && picks.length >= wordCount)} className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${on ? 'bg-indigo-50' : 'hover:bg-slate-50'} disabled:opacity-60`}>
+                                    <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] font-black ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'}`}>{on ? '✓' : ''}</span>
+                                    <span className="font-extrabold text-slate-800">{w.word}</span>
+                                    <span className="text-slate-400 truncate">{w.meaning_en || w.meaning || ''}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    {list.length > 80 && !q && <div className="text-[10px] text-slate-400">Showing the first 80 — use search to find others.</div>}
+                </div>
+            );
+        }
+
+        // ---------- The Multiplayer tab ----------
+        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast }) {
+            const [fbReady, setFbReady] = useState(!!window.FB);
+            const [conn, setConn] = useState(false);
+            const [connWaited, setConnWaited] = useState(false);
+            const offsetRef = useRef(0);
+            const [roomCode, setRoomCode] = useState(null);
+            const [room, setRoom] = useState(null);
+            const [roomLoaded, setRoomLoaded] = useState(false);
+            const [busy, setBusy] = useState(false);
+            const [joinInput, setJoinInput] = useState('');
+            const [mode, setMode] = useState('swap');
+            const [style, setStyle] = useState('mixed');
+            const [wordCount, setWordCount] = useState(10);
+            const [timeLimit, setTimeLimit] = useState(120);
+            const [myPicks, setMyPicks] = useState([]);
+
+            const uid = cloudUser ? cloudUser.uid : null;
+            const myName = ((nickname || '').trim() || (cloudUser && cloudUser.displayName) || 'Player').slice(0, 24);
+            const myPhoto = (cloudUser && cloudUser.photoURL && cloudUser.photoURL.length <= 480) ? cloudUser.photoURL : '';
+            const FB = window.FB;
+            const rtdb = FB && FB.rtdb;
+            const serverNow = () => Date.now() + offsetRef.current;
+            const rr = (path) => FB.dbRef(rtdb, path);
+
+            useEffect(() => {
+                if (window.FB) { setFbReady(true); return; }
+                const h = () => setFbReady(true);
+                window.addEventListener('fb-ready', h, { once: true });
+                return () => window.removeEventListener('fb-ready', h);
+            }, []);
+
+            // connection + clock offset
+            useEffect(() => {
+                if (!fbReady || !window.FB || !window.FB.rtdb || !cloudUser) return;
+                const F = window.FB;
+                const u1 = F.dbOnValue(F.dbRef(F.rtdb, '.info/connected'), (s) => setConn(!!s.val()));
+                const u2 = F.dbOnValue(F.dbRef(F.rtdb, '.info/serverTimeOffset'), (s) => { offsetRef.current = s.val() || 0; });
+                const t = setTimeout(() => setConnWaited(true), 7000);
+                return () => { u1(); u2(); clearTimeout(t); };
+            }, [fbReady, !!cloudUser]);
+
+            // live room subscription
+            useEffect(() => {
+                if (!roomCode || !fbReady || !window.FB || !window.FB.rtdb) return;
+                const F = window.FB;
+                setRoomLoaded(false);
+                const unsub = F.dbOnValue(F.dbRef(F.rtdb, `rooms/${roomCode}`), (snap) => {
+                    setRoom(snap.val());
+                    setRoomLoaded(true);
+                }, (err) => {
+                    console.error('Room listener failed:', err);
+                    triggerToast('Could not read the room — check the Realtime Database rules.');
+                });
+                return () => unsub();
+            }, [roomCode, fbReady]);
+
+            // room closed by host
+            useEffect(() => {
+                if (roomCode && roomLoaded && room === null) {
+                    triggerToast('The room was closed.');
+                    leaveLocal();
+                }
+            }, [room, roomLoaded]);
+
+            // keep presence correct (also after reconnects)
+            useEffect(() => {
+                if (!roomCode || !conn || !uid || !rtdb) return;
+                const pr = rr(`rooms/${roomCode}/players/${uid}/online`);
+                FB.dbOnDisconnect(pr).set(false).catch(() => {});
+                FB.dbSet(pr, true).catch(() => {});
+                // Cancel the "mark me offline" hook when I leave this room, so a
+                // later disconnect can't leave a nameless ghost player behind.
+                return () => { try { FB.dbOnDisconnect(pr).cancel().catch(() => {}); } catch (e) {} };
+            }, [roomCode, conn, uid]);
+
+            // new round -> reset my own player state (host pressed "Play again")
+            useEffect(() => {
+                if (!room || !room.meta || room.meta.status !== 'lobby' || !uid) return;
+                const me = room.players && room.players[uid];
+                if (me && me.done) {
+                    FB.dbUpdate(rr(`rooms/${roomCode}/players/${uid}`), {
+                        score: 0, answered: 0, done: false, finishedMs: null, ready: room.meta.mode === 'same',
+                    }).catch(() => {});
+                    if (room.meta.mode === 'swap' || room.meta.hostUid === uid) FB.dbRemove(rr(`rooms/${roomCode}/words/${uid}`)).catch(() => {});
+                    setMyPicks([]);
+                }
+            }, [room && room.meta && room.meta.status, room && room.meta && room.meta.round]);
+
+            // resume after a page refresh
+            useEffect(() => {
+                if (!conn || !uid || roomCode) return;
+                let saved = null;
+                try { saved = sessionStorage.getItem('wordsmart_mp_room'); } catch (e) {}
+                if (saved) joinRoom(saved, true);
+            }, [conn, uid]);
+
+            const leaveLocal = () => {
+                try { sessionStorage.removeItem('wordsmart_mp_room'); } catch (e) {}
+                setRoomCode(null); setRoom(null); setRoomLoaded(false); setMyPicks([]);
+            };
+
+            const createRoom = async () => {
+                if (!uid || !rtdb || busy) return;
+                setBusy(true);
+                try {
+                    let code = null;
+                    for (let i = 0; i < 6; i++) {
+                        const c = mpMakeCode();
+                        const snap = await FB.dbGet(rr(`rooms/${c}/meta`));
+                        if (!snap.exists()) { code = c; break; }
+                    }
+                    if (!code) throw new Error('Could not find a free room code, try again.');
+                    await FB.dbSet(rr(`rooms/${code}/meta`), {
+                        hostUid: uid, hostName: myName, mode, style, wordCount, timeLimit,
+                        status: 'lobby', round: 1, createdAt: Date.now(),
+                    });
+                    await FB.dbSet(rr(`rooms/${code}/players/${uid}`), {
+                        name: myName, photo: myPhoto, online: true, ready: mode === 'same', score: 0, answered: 0, done: false, joinedAt: Date.now(),
+                    });
+                    try { sessionStorage.setItem('wordsmart_mp_room', code); } catch (e) {}
+                    setRoom(null); setMyPicks([]); setRoomCode(code);
+                } catch (e) {
+                    console.error(e);
+                    triggerToast(`Could not create the room: ${e && e.message ? e.message : 'unknown error'}`);
+                } finally { setBusy(false); }
+            };
+
+            const joinRoom = async (rawCode, resume = false) => {
+                const code = String(rawCode || '').trim().toUpperCase();
+                if (!uid || !rtdb || !code) return;
+                setBusy(true);
+                try {
+                    const snap = await FB.dbGet(rr(`rooms/${code}`));
+                    const val = snap.val();
+                    if (!val || !val.meta) {
+                        if (!resume) triggerToast('No room found with that code.');
+                        try { sessionStorage.removeItem('wordsmart_mp_room'); } catch (e) {}
+                        return;
+                    }
+                    const already = val.players && val.players[uid];
+                    if (!already) {
+                        if (val.meta.status !== 'lobby') { triggerToast('That game has already started.'); return; }
+                        if (Object.keys(val.players || {}).length >= MP_MAX_PLAYERS) { triggerToast(`That room is full (${MP_MAX_PLAYERS} players max).`); return; }
+                        await FB.dbSet(rr(`rooms/${code}/players/${uid}`), {
+                            name: myName, photo: myPhoto, online: true, ready: val.meta.mode === 'same', score: 0, answered: 0, done: false, joinedAt: Date.now(),
+                        });
+                    }
+                    try { sessionStorage.setItem('wordsmart_mp_room', code); } catch (e) {}
+                    setRoom(null); setMyPicks([]); setRoomCode(code);
+                } catch (e) {
+                    console.error(e);
+                    triggerToast(`Could not join: ${e && e.message ? e.message : 'unknown error'}`);
+                } finally { setBusy(false); }
+            };
+
+            const leaveRoom = async () => {
+                const code = roomCode;
+                const isHost = room && room.meta && room.meta.hostUid === uid;
+                if (code && rtdb && uid) { try { FB.dbOnDisconnect(rr(`rooms/${code}/players/${uid}/online`)).cancel().catch(() => {}); } catch (e) {} }
+                leaveLocal();
+                if (!code || !rtdb) return;
+                try {
+                    if (isHost) await FB.dbRemove(rr(`rooms/${code}`));
+                    else {
+                        await FB.dbRemove(rr(`rooms/${code}/players/${uid}`));
+                        await FB.dbRemove(rr(`rooms/${code}/words/${uid}`));
+                    }
+                } catch (e) { console.error(e); }
+            };
+
+            const updateMe = (fields) => {
+                if (!roomCode || !uid || !rtdb) return;
+                FB.dbUpdate(rr(`rooms/${roomCode}/players/${uid}`), fields).catch((e) => console.error('update failed', e));
+            };
+
+            const lockWords = async () => {
+                if (!room || myPicks.length !== room.meta.wordCount) return;
+                try {
+                    await FB.dbSet(rr(`rooms/${roomCode}/words/${uid}`), myPicks);
+                    await FB.dbUpdate(rr(`rooms/${roomCode}/players/${uid}`), { ready: true });
+                } catch (e) { triggerToast('Could not save your words. Please try again.'); }
+            };
+            const unlockWords = async () => {
+                try {
+                    await FB.dbRemove(rr(`rooms/${roomCode}/words/${uid}`));
+                    await FB.dbUpdate(rr(`rooms/${roomCode}/players/${uid}`), { ready: false });
+                } catch (e) { triggerToast('Could not unlock your words.'); }
+            };
+
+            const startGame = async () => {
+                if (!room) return;
+                const startAt = serverNow() + 4500;
+                try {
+                    await FB.dbUpdate(rr(`rooms/${roomCode}/meta`), {
+                        status: 'playing', startAt, endAt: startAt + room.meta.timeLimit * 1000,
+                    });
+                } catch (e) { triggerToast('Could not start the game.'); }
+            };
+            const playAgain = async () => {
+                try {
+                    await FB.dbUpdate(rr(`rooms/${roomCode}/meta`), {
+                        status: 'lobby', round: (room.meta.round || 1) + 1, startAt: null, endAt: null,
+                    });
+                } catch (e) { triggerToast('Could not reset the room.'); }
+            };
+            const copyCode = () => {
+                try { navigator.clipboard.writeText(roomCode); triggerToast(`Room code ${roomCode} copied!`); }
+                catch (e) { triggerToast(`Room code: ${roomCode}`); }
+            };
+
+            // ---------------- gates ----------------
+            const shell = (children) => <div className="space-y-5 tab-panel-enter">{children}</div>;
+            const header = (
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">🌐 Multiplayer Arena</h2>
+                    {cloudUser && (
+                        <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${conn ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                            {conn ? '● Connected' : '○ Connecting…'}
+                        </span>
+                    )}
+                </div>
+            );
+
+            if (!fbReady) return shell(<>{header}<div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-sm text-slate-500">Loading Firebase…</div></>);
+            if (!rtdb) return shell(<>{header}<div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-sm text-amber-800">Realtime Database could not be loaded. Check your internet connection and the database URL in the Firebase section at the top of the file.</div></>);
+            if (!cloudAuthReady) return shell(<>{header}<div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-sm text-slate-500">Checking your account…</div></>);
+            if (!cloudUser) {
+                return shell(<>{header}
+                    <div className="bg-white border border-slate-200 rounded-3xl p-10 text-center shadow-sm">
+                        <div className="text-5xl">🔐</div>
+                        <h3 className="text-lg font-black text-slate-800 mt-3">Sign in to play with friends</h3>
+                        <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">Rooms need to know who's who. Sign in with Google — your name and photo show up on the scoreboard, nothing else is shared.</p>
+                        <button onClick={onSignIn} className="mt-5 px-6 py-3 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700">Sign in with Google</button>
+                    </div>
+                </>);
+            }
+
+            // ---------------- home (no room yet) ----------------
+            if (!roomCode) {
+                const perPlayer = mode === 'swap' ? `Each player puts in ${wordCount} words; with 4 players that's ${wordCount * 3} questions each.` : `${wordCount} questions, same for everybody.`;
+                return shell(<>{header}
+                    {connWaited && !conn && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-800 leading-relaxed">
+                            <b>Can't reach the Realtime Database.</b> In the Firebase console open <b>Build → Realtime Database → Create database</b>, then check that the database URL in the Firebase section at the top of this file matches the one shown there.
+                        </div>
+                    )}
+                    <div className="grid md:grid-cols-[1.4fr_1fr] gap-4">
+                        <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
+                            <h3 className="text-sm font-black text-slate-800">➕ Create a room</h3>
+                            <div className="grid sm:grid-cols-2 gap-2">
+                                {MP_MODES.map(m => (
+                                    <button key={m.id} onClick={() => setMode(m.id)} className={`text-left p-3 rounded-xl border-2 transition-all ${mode === m.id ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-indigo-300'}`}>
+                                        <div className="text-sm font-black text-slate-800">{m.icon} {m.label}</div>
+                                        <div className="text-[11px] text-slate-500 mt-0.5 leading-snug">{m.desc}</div>
+                                    </button>
+                                ))}
+                            </div>
+                            <div>
+                                <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-1.5">Question style</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {MP_STYLES.map(s => (
+                                        <button key={s.id} onClick={() => setStyle(s.id)} title={s.desc} className={`px-3 py-1.5 rounded-full text-xs font-bold border ${style === s.id ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>{s.label}</button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="grid sm:grid-cols-2 gap-4">
+                                <div>
+                                    <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-400"><span>{mode === 'swap' ? 'Words per player' : 'Number of words'}</span><span className="text-indigo-600">{wordCount}</span></div>
+                                    <input type="range" min="3" max="30" value={wordCount} onChange={(e) => setWordCount(Number(e.target.value))} className="w-full accent-indigo-600" />
+                                </div>
+                                <div>
+                                    <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-400"><span>Time limit</span><span className="text-indigo-600">{mpFmtClock(timeLimit * 1000)}</span></div>
+                                    <input type="range" min="30" max="600" step="15" value={timeLimit} onChange={(e) => setTimeLimit(Number(e.target.value))} className="w-full accent-indigo-600" />
+                                </div>
+                            </div>
+                            <p className="text-[11px] text-slate-400">{perPlayer} Up to {MP_MAX_PLAYERS} players.</p>
+                            <button onClick={createRoom} disabled={busy || !conn} className="w-full py-3 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-50">{busy ? 'Creating…' : 'Create room'}</button>
+                        </div>
+                        <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm h-fit">
+                            <h3 className="text-sm font-black text-slate-800">🔑 Join with a code</h3>
+                            <input
+                                value={joinInput}
+                                onChange={(e) => setJoinInput(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5))}
+                                onKeyDown={(e) => { if (e.key === 'Enter') joinRoom(joinInput); }}
+                                placeholder="ABCDE"
+                                className="w-full text-center text-3xl font-black tracking-[0.4em] py-3 rounded-xl border-2 border-slate-200 focus:border-indigo-500 outline-none text-slate-800 bg-white"
+                            />
+                            <button onClick={() => joinRoom(joinInput)} disabled={busy || !conn || joinInput.length < 5} className="w-full py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm hover:bg-emerald-700 disabled:opacity-50">Join room</button>
+                            <p className="text-[11px] text-slate-400">You'll play as <b className="text-slate-600">{myName}</b>. Change your nickname from your profile.</p>
+                        </div>
+                    </div>
+                </>);
+            }
+
+            // ---------------- inside a room ----------------
+            if (!room || !room.meta) return shell(<>{header}<div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-sm text-slate-500">Entering room {roomCode}…</div></>);
+
+            const meta = room.meta;
+            const isHost = meta.hostUid === uid;
+            const players = room.players || {};
+            const playerList = Object.entries(players).map(([id, p]) => ({ id, ...p })).sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+            const lockedWords = Object.values((room.words && room.words[uid]) || {});
+            const iAmLocked = lockedWords.length > 0;
+            const onlinePlayers = playerList.filter(p => p.online !== false);
+            const hostWordsLocked = Object.values((room.words && room.words[meta.hostUid]) || {}).length === meta.wordCount;
+            const everyoneReady = meta.mode === 'same' ? hostWordsLocked : onlinePlayers.every(p => p.ready);
+            const canStart = isHost && onlinePlayers.length >= 2 && everyoneReady;
+            const styleLabel = (MP_STYLES.find(s => s.id === meta.style) || {}).label || 'Mixed';
+            const modeInfo = MP_MODES.find(m => m.id === meta.mode) || MP_MODES[0];
+
+            if (meta.status === 'playing' && meta.startAt && meta.endAt) {
+                return shell(<>{header}
+                    <MpPlay key={`${roomCode}-${meta.round}`} code={roomCode} room={room} uid={uid} serverNow={serverNow} onUpdateMe={updateMe} onPlayAgain={playAgain} onLeave={leaveRoom} isHost={isHost} />
+                </>);
+            }
+
+            const hostOnline = !players[meta.hostUid] || players[meta.hostUid].online !== false;
+            return shell(<>{header}
+                <div className="rounded-3xl p-5 bg-gradient-to-br from-slate-900 to-indigo-950 text-white shadow-xl flex items-center justify-between gap-4 flex-wrap">
+                    <div>
+                        <div className="text-[11px] font-bold uppercase tracking-widest text-indigo-300">Room code</div>
+                        <button onClick={copyCode} title="Click to copy" className="text-5xl font-black tracking-[0.25em] mt-1 hover:text-indigo-200 transition-colors">{roomCode}</button>
+                        <div className="text-[11px] text-indigo-200/70 mt-1">Share this code with your friends · tap to copy</div>
+                    </div>
+                    <div className="text-xs space-y-1 text-indigo-100/90">
+                        <div><b>{modeInfo.icon} {modeInfo.label}</b> · {styleLabel}</div>
+                        <div>{meta.wordCount} {meta.mode === 'swap' ? 'words per player' : 'words'} · {mpFmtClock(meta.timeLimit * 1000)} on the clock</div>
+                        <div>Host: {meta.hostName}</div>
+                    </div>
+                </div>
+                {!hostOnline && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 font-semibold">The host went offline. If they don't come back, leave and create a new room.</div>}
+                <div className="grid lg:grid-cols-[1fr_1.3fr] gap-4">
+                    <div className="bg-white border border-slate-200 rounded-2xl p-4 h-fit">
+                        <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-sm font-black text-slate-800">Players</h3>
+                            <span className="text-[11px] font-bold text-slate-400">{playerList.length}/{MP_MAX_PLAYERS}</span>
+                        </div>
+                        <div className="space-y-1.5">
+                            {playerList.map(p => (
+                                <div key={p.id} className={`flex items-center gap-2.5 rounded-xl px-2.5 py-2 ${p.id === uid ? 'bg-indigo-50' : 'bg-slate-50'} ${p.online === false ? 'opacity-40' : ''}`}>
+                                    <MpAvatar name={p.name} photo={p.photo} />
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-extrabold text-slate-800 truncate">{p.name}{p.id === uid ? ' (you)' : ''}</div>
+                                        <div className="text-[10px] font-bold text-slate-400">{p.id === meta.hostUid ? '👑 Host' : 'Player'}{p.online === false ? ' · offline' : ''}</div>
+                                    </div>
+                                    <span className={`text-[10px] font-black px-2 py-1 rounded-full ${p.ready ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{p.ready ? 'READY' : 'PICKING…'}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+                        {meta.mode === 'swap' || isHost ? (
+                            <>
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                    <h3 className="text-sm font-black text-slate-800">{meta.mode === 'swap' ? 'Pick the words others will face' : 'Pick the words for everyone'}</h3>
+                                    <span className={`text-xs font-black px-2.5 py-1 rounded-full ${(iAmLocked ? lockedWords.length : myPicks.length) === meta.wordCount ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{iAmLocked ? lockedWords.length : myPicks.length} / {meta.wordCount}</span>
+                                </div>
+                                {iAmLocked ? (
+                                    <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-center">
+                                        <div className="text-2xl">✅</div>
+                                        <div className="text-sm font-black text-emerald-800 mt-1">Words locked in</div>
+                                        <div className="text-[11px] text-emerald-700/80 mt-0.5 line-clamp-2">{lockedWords.map(w => w.w).join(' · ')}</div>
+                                        <button onClick={unlockWords} className="mt-3 px-4 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-700 text-xs font-bold hover:bg-emerald-100">Edit my words</button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <MpWordPicker books={books} allWords={allWords} defaultBookId={activeBookId} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={false} />
+                                        <button onClick={lockWords} disabled={myPicks.length !== meta.wordCount} className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-40">🔒 Lock in my words</button>
+                                    </>
+                                )}
+                            </>
+                        ) : (
+                            <div className="text-center py-10">
+                                <div className="text-4xl">⏳</div>
+                                <p className="text-sm font-bold text-slate-700 mt-2">{hostWordsLocked ? 'Words are set!' : 'The host is picking the words…'}</p>
+                                <p className="text-xs text-slate-400 mt-1">You'll all get the same questions once the host starts.</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                    {isHost ? (
+                        <button onClick={startGame} disabled={!canStart} className="flex-1 min-w-[180px] py-3.5 rounded-xl bg-emerald-600 text-white font-black text-sm hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed">
+                            {canStart ? '🚀 Start game' : (onlinePlayers.length < 2 ? 'Waiting for at least 2 players…' : 'Waiting for everyone to be ready…')}
+                        </button>
+                    ) : (
+                        <div className="flex-1 min-w-[180px] py-3.5 rounded-xl bg-slate-100 text-slate-500 font-bold text-xs text-center">Waiting for the host to start…</div>
+                    )}
+                    <button onClick={leaveRoom} className="px-5 py-3.5 rounded-xl border border-slate-300 text-slate-600 font-bold text-sm hover:bg-slate-100">{isHost ? 'Close room' : 'Leave room'}</button>
+                </div>
+            </>);
         }
 
         function App() {
@@ -4088,6 +4930,8 @@ Rules:
             const [nickname, setNickname] = useState(() => localStorage.getItem('wordsmart_nickname') || '');
             const [showProfileModal, setShowProfileModal] = useState(false);
             const [nicknameDraft, setNicknameDraft] = useState('');
+            const [mpVisited, setMpVisited] = useState(false);
+            useEffect(() => { if (activeTab === 'multi') setMpVisited(true); }, [activeTab]);
             useEffect(() => {
                 if (nickname) localStorage.setItem('wordsmart_nickname', nickname);
                 else localStorage.removeItem('wordsmart_nickname');
@@ -6534,6 +7378,7 @@ Rules:
                                     { id: 'flashcards', label: '🎴 Flashcards', desc: 'Memorize & Flip' },
                                     { id: 'quiz', label: '🧠 Practice Quiz', desc: 'Test Knowledge' },
                                     { id: 'game', label: '🎮 Word Quest', desc: 'Canvas Arena & Bosses' },
+                                    { id: 'multi', label: '🌐 Multiplayer', desc: 'Play with friends' },
                                     { id: 'stats', label: '📊 Stats & Streak', desc: 'Progress & Activity' },
                                     { id: 'manage', label: '⚙️ Word Manager', desc: 'Pages & Import' }
                                 ].map(tab => (
@@ -7698,6 +8543,9 @@ Rules:
                         <ModernVocabGame
                             userXP={userXP}
                             userLevel={userLevel}
+                            streak={currentStreak}
+                            todayLearned={todaysActivity.learned}
+                            dailyGoal={dailyGoal}
                             wordPool={gameWordPool}
                             showBangla={showBangla}
                             triggerToast={triggerToast}
@@ -7718,6 +8566,22 @@ Rules:
                             mistakeBankCount={gameMistakeWords.length}
                             onOpenMistakeBank={(tab) => { setGameReviewTab(tab || 'mistakes'); setGameMistakeSelection(null); setShowGameReviewModal(true); }}
                         />
+                    )}
+
+                    {/* MODE 4b: MULTIPLAYER (stays mounted once opened so a live room keeps its connection while you browse other tabs) */}
+                    {(activeTab === 'multi' || mpVisited) && (
+                        <div style={{ display: activeTab === 'multi' ? 'block' : 'none' }}>
+                            <MultiplayerArena
+                                cloudUser={cloudUser}
+                                cloudAuthReady={cloudAuthReady}
+                                onSignIn={signInWithGoogle}
+                                nickname={nickname}
+                                books={books}
+                                allWords={allWords}
+                                activeBookId={activeBook.id}
+                                triggerToast={triggerToast}
+                            />
+                        </div>
                     )}
 
                     {/* MODE 5: STATS & STREAK */}
