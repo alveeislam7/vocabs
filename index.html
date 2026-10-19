@@ -3411,33 +3411,165 @@
         // ant[] } by the caller, so this one component can serve chunks (slim RTDB
         // shape) and full local word objects alike. `pickable=false` makes it a
         // read-only browser (used for Study phase when the host picks for you).
+        // Build a slim pick payload (what gets written to RTDB words/[uid]).
+        // Related entries (syn/ant) may be strings or rich objects; when a related
+        // entry is picked as the test word, we promote it to its own slim word and
+        // keep the parent word as a synonym/antonym so quiz styles still work.
+        function mpRelatedLabel(x) {
+            return String(typeof x === 'string' ? x : (x && (x.word || x.text)) || '').trim();
+        }
+        function mpPickPayloadFromRow(row) {
+            return { w: row.w, m: row.m || '', b: row.b || '', e: row.e || '', s: row.syn || [], a: row.ant || [] };
+        }
+        function mpMakeRelatedRow(rel, parent, role, i) {
+            const label = mpRelatedLabel(rel);
+            if (!label) return null;
+            const rich = rel && typeof rel === 'object' ? rel : null;
+            const m = String((rich && (rich.meaning_en || rich.meaning)) || parent.m || '').trim();
+            const b = String((rich && (rich.meaning_bn || rich.bangla)) || '').trim();
+            const e = String((rich && (rich.sentence || rich.example || rich.example_main)) || '').trim();
+            // Parent sits in the opposite / same family list so Syn/Ant quiz style still has material.
+            const syn = role === 'syn' ? [parent.w].filter(Boolean) : [];
+            const ant = role === 'ant' ? [parent.w].filter(Boolean) : (role === 'syn' ? [] : []);
+            return {
+                key: `${parent.key}::${role}::${i}::${label.toLowerCase()}`,
+                role,
+                w: label.slice(0, 70),
+                m: m.slice(0, 350),
+                b: b.slice(0, 350),
+                e: e.slice(0, 450),
+                syn,
+                ant,
+                parentKey: parent.key,
+            };
+        }
+
+        // Word-list-style master/detail used everywhere multiplayer picks or studies:
+        // LEFT = family list (main + nested syn/ant) with the pick checkbox on the RIGHT
+        // of each row; RIGHT = detail card + gallery swipe to memorize / prepare.
         function MpWordMasterDetail({ words, pickable = false, wordCount = 0, picks, setPicks, locked, emptyHint = 'No words here.' }) {
             const [q, setQ] = useState('');
-            const [selectedKey, setSelectedKey] = useState(words[0] ? words[0].key : null);
-            const filtered = useMemo(() => {
+            const [selectedKey, setSelectedKey] = useState(null);
+            const families = useMemo(() => (words || []).map((w) => {
+                const kids = [];
+                (w.synRaw || w.syn || []).forEach((rel, i) => {
+                    const row = mpMakeRelatedRow(rel, w, 'syn', i);
+                    if (row) kids.push(row);
+                });
+                (w.antRaw || w.ant || []).forEach((rel, i) => {
+                    const row = mpMakeRelatedRow(rel, w, 'ant', i);
+                    if (row) kids.push(row);
+                });
+                return { main: { ...w, role: 'main' }, kids };
+            }), [words]);
+            const flatRows = useMemo(() => {
+                const out = [];
+                families.forEach((f) => { out.push(f.main); f.kids.forEach((k) => out.push(k)); });
+                return out;
+            }, [families]);
+            const filteredFamilies = useMemo(() => {
                 const qq = q.trim().toLowerCase();
-                return !qq ? words : words.filter(w => w.w.toLowerCase().includes(qq) || (w.m || '').toLowerCase().includes(qq));
-            }, [words, q]);
+                if (!qq) return families;
+                return families.filter((f) => {
+                    const hitMain = f.main.w.toLowerCase().includes(qq) || (f.main.m || '').toLowerCase().includes(qq);
+                    const hitKid = f.kids.some((k) => k.w.toLowerCase().includes(qq) || (k.m || '').toLowerCase().includes(qq));
+                    return hitMain || hitKid;
+                }).map((f) => {
+                    if (!qq) return f;
+                    const kids = f.kids.filter((k) => k.w.toLowerCase().includes(qq) || (k.m || '').toLowerCase().includes(qq)
+                        || f.main.w.toLowerCase().includes(qq) || (f.main.m || '').toLowerCase().includes(qq));
+                    return { main: f.main, kids };
+                });
+            }, [families, q]);
+            const filteredFlat = useMemo(() => {
+                const out = [];
+                filteredFamilies.forEach((f) => { out.push(f.main); f.kids.forEach((k) => out.push(k)); });
+                return out;
+            }, [filteredFamilies]);
             useEffect(() => {
-                if (!filtered.some(w => w.key === selectedKey)) setSelectedKey(filtered[0] ? filtered[0].key : null);
-            }, [filtered.map(w => w.key).join(',')]);
-            const picked = new Set((picks || []).map(p => p.w.toLowerCase()));
-            const toggle = (w) => {
+                if (!filteredFlat.some((w) => w.key === selectedKey)) setSelectedKey(filteredFlat[0] ? filteredFlat[0].key : null);
+            }, [filteredFlat.map((w) => w.key).join(',')]);
+            const picked = new Set((picks || []).map((p) => String(p.w || '').toLowerCase()));
+            const toggle = (row) => {
                 if (!pickable || locked) return;
-                const k = w.w.toLowerCase();
-                if (picked.has(k)) setPicks(picks.filter(p => p.w.toLowerCase() !== k));
-                else if (picks.length < wordCount) setPicks([...picks, { w: w.w, m: w.m, b: w.b, e: w.e, s: w.syn, a: w.ant }]);
+                const k = String(row.w || '').toLowerCase();
+                if (!k) return;
+                if (picked.has(k)) setPicks(picks.filter((p) => String(p.w || '').toLowerCase() !== k));
+                else if (picks.length < wordCount) setPicks([...picks, mpPickPayloadFromRow(row)]);
             };
+            const allPickable = useMemo(() => flatRows, [flatRows]);
             const randomFill = () => {
                 if (!pickable || locked) return;
-                const rest = words.filter(w => !picked.has(w.w.toLowerCase()));
-                setPicks([...picks, ...mpShuffle(rest, Math.random).slice(0, wordCount - picks.length).map(w => ({ w: w.w, m: w.m, b: w.b, e: w.e, s: w.syn, a: w.ant }))]);
+                const rest = allPickable.filter((w) => !picked.has(String(w.w || '').toLowerCase()));
+                setPicks([...picks, ...mpShuffle(rest, Math.random).slice(0, wordCount - picks.length).map(mpPickPayloadFromRow)]);
             };
-            const selected = filtered.find(w => w.key === selectedKey) || filtered[0] || null;
+            const selIdx = filteredFlat.findIndex((w) => w.key === selectedKey);
+            const selected = selIdx >= 0 ? filteredFlat[selIdx] : (filteredFlat[0] || null);
+            const prevRow = selIdx > 0 ? filteredFlat[selIdx - 1] : null;
+            const nextRow = selIdx >= 0 && selIdx < filteredFlat.length - 1 ? filteredFlat[selIdx + 1] : null;
+            const detailCard = (row) => {
+                if (!row) return <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-xs text-slate-400">Select a word to preview it here.</div>;
+                const isKid = row.role === 'syn' || row.role === 'ant';
+                const parent = isKid ? flatRows.find((r) => r.key === row.parentKey) : null;
+                return (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2.5 shadow-sm">
+                        <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                                {isKid && (
+                                    <div className={`text-[10px] font-bold uppercase tracking-wider mb-0.5 ${row.role === 'syn' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                        {row.role === 'syn' ? 'Synonym' : 'Antonym'}{parent ? ` · of ${parent.w}` : ''}
+                                    </div>
+                                )}
+                                <div className="text-lg font-black text-slate-800">{row.w}</div>
+                            </div>
+                            {pickable && (
+                                <button type="button" onClick={() => toggle(row)} disabled={locked || (!picked.has(String(row.w).toLowerCase()) && picks.length >= wordCount)}
+                                    className={`shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-black border ${picked.has(String(row.w).toLowerCase()) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>
+                                    {picked.has(String(row.w).toLowerCase()) ? '✓ Picked' : 'Pick'}
+                                </button>
+                            )}
+                        </div>
+                        {row.b && <div className="text-sm font-semibold text-indigo-700">{row.b}</div>}
+                        {row.m && <div className="text-sm text-slate-600">{row.m}</div>}
+                        {row.e && <div className="text-sm italic text-slate-400">“{row.e}”</div>}
+                        {!isKid && (row.syn || []).length > 0 && (
+                            <div>
+                                <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Synonyms</span>
+                                <div className="text-sm text-emerald-700 mt-0.5">{(row.syn || []).join(', ')}</div>
+                            </div>
+                        )}
+                        {!isKid && (row.ant || []).length > 0 && (
+                            <div>
+                                <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">Antonyms</span>
+                                <div className="text-sm text-rose-600 mt-0.5">{(row.ant || []).join(', ')}</div>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+            const rowBtn = (row, nested) => {
+                const on = pickable && picked.has(String(row.w || '').toLowerCase());
+                const isSel = selected && selected.key === row.key;
+                const tone = row.role === 'syn' ? 'text-emerald-700' : row.role === 'ant' ? 'text-rose-700' : (isSel ? 'text-indigo-700' : 'text-slate-800');
+                return (
+                    <div key={row.key} className={`flex items-center gap-1.5 ${nested ? 'pl-5 pr-2 py-1' : 'pl-3 pr-2 py-2'} ${isSel ? 'bg-slate-100' : 'hover:bg-slate-50'}`}>
+                        <button type="button" onClick={() => setSelectedKey(row.key)} className="flex-1 min-w-0 text-left">
+                            <span className={`text-sm font-bold truncate block ${nested ? 'text-xs font-semibold' : ''} ${tone}`}>{row.w}</span>
+                        </button>
+                        {pickable && (
+                            <button type="button" title={on ? 'Unpick' : 'Pick for the test'} onClick={() => toggle(row)}
+                                disabled={locked || (!on && picks.length >= wordCount)}
+                                className={`w-5 h-5 rounded border flex items-center justify-center text-[10px] font-black shrink-0 ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300 bg-white'}`}>
+                                {on ? '✓' : ''}
+                            </button>
+                        )}
+                    </div>
+                );
+            };
             return (
                 <div className="space-y-2">
                     <div className="flex gap-2 flex-wrap items-center">
-                        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="flex-1 min-w-[120px] px-3 py-1.5 rounded-lg border border-slate-300 text-xs text-slate-700" />
+                        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search word, synonym, antonym…" className="flex-1 min-w-[120px] px-3 py-1.5 rounded-lg border border-slate-300 text-xs text-slate-700" />
                         {pickable && (
                             <>
                                 <button type="button" onClick={randomFill} disabled={locked || picks.length >= wordCount} className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold hover:bg-amber-200 disabled:opacity-40">🎲 Fill randomly</button>
@@ -3445,84 +3577,92 @@
                             </>
                         )}
                     </div>
-                    <div className="grid md:grid-cols-2 gap-3">
-                        {/* LEFT: compact list — tap a word to preview it on the right; tap ✓ to pick it */}
-                        <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
-                            {filtered.length === 0 && <div className="p-4 text-xs text-slate-400 text-center">{emptyHint}</div>}
-                            {filtered.map((w) => {
-                                const on = pickable && picked.has(w.w.toLowerCase());
-                                const isSel = selectedKey === w.key;
-                                return (
-                                    <div key={w.key} className={`flex items-center gap-2 px-3 py-2 text-xs transition-colors ${isSel ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}>
-                                        {pickable && (
-                                            <button type="button" onClick={() => toggle(w)} disabled={locked || (!on && picks.length >= wordCount)} className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] font-black shrink-0 ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'}`}>{on ? '✓' : ''}</button>
+                    <div className="flex flex-col lg:flex-row gap-3 items-stretch">
+                        {/* LEFT — same idea as Word List: compact family list */}
+                        <div className="w-full lg:w-[42%] shrink-0 max-h-[28rem] overflow-hidden rounded-2xl border border-slate-200 bg-white flex flex-col">
+                            <div className="shrink-0 h-10 flex items-center justify-between px-3 border-b border-slate-100">
+                                <span className="text-[11px] font-bold text-indigo-600 uppercase tracking-wider">Word</span>
+                                {pickable && <span className="text-[10px] font-bold text-slate-400">tap ✓ to pick</span>}
+                            </div>
+                            <div className="flex-1 min-h-0 overflow-y-auto">
+                                {filteredFamilies.length === 0 && <div className="p-4 text-xs text-slate-400 text-center">{emptyHint}</div>}
+                                {filteredFamilies.map((f) => (
+                                    <div key={f.main.key} className="border-b border-slate-200/50 last:border-b-0">
+                                        {rowBtn(f.main, false)}
+                                        {f.kids.length > 0 && (
+                                            <div className="pb-1">
+                                                {f.kids.map((k) => rowBtn(k, true))}
+                                            </div>
                                         )}
-                                        <button type="button" onClick={() => setSelectedKey(w.key)} className="flex-1 min-w-0 text-left flex items-center gap-2">
-                                            <span className={`font-extrabold shrink-0 ${isSel ? 'text-indigo-700' : 'text-slate-800'}`}>{w.w}</span>
-                                            <span className="text-slate-400 truncate">{w.m || ''}</span>
-                                        </button>
                                     </div>
-                                );
-                            })}
+                                ))}
+                            </div>
                         </div>
-                        {/* RIGHT: full card for the selected word — everything visible at once */}
-                        <div className="rounded-xl border border-slate-200 bg-white p-4 max-h-72 overflow-y-auto">
-                            {selected ? (
-                                <div className="space-y-2.5">
-                                    <div className="text-base font-black text-slate-800">{selected.w}</div>
-                                    {selected.b && <div className="text-sm font-semibold text-indigo-700">{selected.b}</div>}
-                                    {selected.m && <div className="text-sm text-slate-600">{selected.m}</div>}
-                                    {selected.e && <div className="text-sm italic text-slate-400">“{selected.e}”</div>}
-                                    {selected.syn.length > 0 && (
-                                        <div>
-                                            <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Synonyms</span>
-                                            <div className="text-sm text-emerald-700 mt-0.5">{selected.syn.join(', ')}</div>
-                                        </div>
-                                    )}
-                                    {selected.ant.length > 0 && (
-                                        <div>
-                                            <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">Antonyms</span>
-                                            <div className="text-sm text-rose-600 mt-0.5">{selected.ant.join(', ')}</div>
-                                        </div>
-                                    )}
-                                </div>
-                            ) : <div className="text-xs text-slate-400 text-center py-10">Select a word to preview it here.</div>}
+                        {/* RIGHT — detail + gallery swipe (memorize / prepare) */}
+                        <div className="flex-1 min-w-0">
+                            {filteredFlat.length > 0 ? (
+                                <SwipeDeck
+                                    label={`${Math.max(1, selIdx + 1)} / ${filteredFlat.length}`}
+                                    prev={prevRow ? { node: detailCard(prevRow) } : null}
+                                    next={nextRow ? { node: detailCard(nextRow) } : null}
+                                    cur={detailCard(selected)}
+                                    onPrev={() => prevRow && setSelectedKey(prevRow.key)}
+                                    onNext={() => nextRow && setSelectedKey(nextRow.key)}
+                                />
+                            ) : (
+                                <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-xs text-slate-400">{emptyHint}</div>
+                            )}
                         </div>
                     </div>
                 </div>
             );
         }
 
-        // Full local word objects -> the shared component's normalized shape (used by
-        // MpWordPicker, where the source is the person's own rich book data).
+        // Full local word objects -> normalized family row (keeps rich syn/ant objects).
         function mpNormalizeFullWord(w, i) {
             const relatedNames = (rel) => (Array.isArray(rel) ? rel : [])
-                .map(x => (typeof x === 'string' ? x : (x && (x.word || x.text)) || ''))
-                .map(x => String(x).trim()).filter(Boolean).slice(0, 3);
+                .map(mpRelatedLabel).filter(Boolean).slice(0, 8);
+            const synRaw = Array.isArray(w.synonyms) ? w.synonyms : [];
+            const antRaw = Array.isArray(w.antonyms) ? w.antonyms : [];
             return {
-                key: `${w.id}-${i}`,
+                key: `${w.id || w.word}-${i}`,
                 w: w.word,
                 m: w.meaning_en || w.meaning || '',
-                b: w.meaning_bn || '',
-                e: w.example_main || '',
-                syn: relatedNames(w.synonyms),
-                ant: relatedNames(w.antonyms),
+                b: w.meaning_bn || w.bangla || '',
+                e: w.example_main || w.sentence || '',
+                syn: relatedNames(synRaw),
+                ant: relatedNames(antRaw),
+                synRaw,
+                antRaw,
             };
         }
 
-        // Picker that browses a person's full local book(s) (not yet narrowed to a
-        // chunk) — used when creating a room/challenge without a chunk pre-selected.
-        function MpWordPicker({ books, allWords, defaultBookId, wordCount, picks, setPicks, locked }) {
+        // Picker that browses a book — with optional chunk filter (same chunks as Word List).
+        // Used in the lobby when the room was created without a pre-set chunk.
+        function MpWordPicker({ books, allWords, defaultBookId, wordCount, picks, setPicks, locked, chunkSize = 25 }) {
             const [bookId, setBookId] = useState(defaultBookId || (books[0] && books[0].id));
-            const list = (allWords[bookId] || []);
-            const words = useMemo(() => list.filter(w => w.word).slice(0, 200).map(mpNormalizeFullWord), [list]);
+            const [chunkIdx, setChunkIdx] = useState(-1); // -1 = whole book (capped)
+            const chunks = useMemo(() => mpChunkList(allWords[bookId] || [], chunkSize), [allWords, bookId, chunkSize]);
+            useEffect(() => { setChunkIdx(-1); }, [bookId]);
+            useEffect(() => { if (chunkIdx >= chunks.length) setChunkIdx(-1); }, [chunks.length, chunkIdx]);
+            const list = useMemo(() => {
+                if (chunkIdx >= 0 && chunks[chunkIdx]) return chunks[chunkIdx].words;
+                return (allWords[bookId] || []).filter((w) => w && w.word).slice(0, 200);
+            }, [allWords, bookId, chunkIdx, chunks]);
+            const words = useMemo(() => list.filter((w) => w.word).map(mpNormalizeFullWord), [list]);
             return (
                 <div className="space-y-2">
-                    <select value={bookId} onChange={(e) => setBookId(e.target.value)} disabled={locked} className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 bg-white">
-                        {books.map(b => <option key={b.id} value={b.id}>{b.name} ({(allWords[b.id] || []).length})</option>)}
-                    </select>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                        <select value={bookId} onChange={(e) => setBookId(e.target.value)} disabled={locked} className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 bg-white">
+                            {books.map((b) => <option key={b.id} value={b.id}>{b.name} ({(allWords[b.id] || []).length})</option>)}
+                        </select>
+                        <select value={chunkIdx} onChange={(e) => setChunkIdx(Number(e.target.value))} disabled={locked} className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 bg-white">
+                            <option value={-1}>All words{ (allWords[bookId] || []).length > 200 ? ' (first 200)' : ''}</option>
+                            {chunks.map((c) => <option key={c.index} value={c.index}>{c.label} · {c.words.length}</option>)}
+                        </select>
+                    </div>
                     <MpWordMasterDetail words={words} pickable wordCount={wordCount} picks={picks} setPicks={setPicks} locked={locked} emptyHint="No words here." />
-                    {list.length > 200 && <div className="text-[10px] text-slate-400">Showing the first 200 — use the search box to find others.</div>}
+                    {chunkIdx < 0 && (allWords[bookId] || []).length > 200 && <div className="text-[10px] text-slate-400">Showing the first 200 — pick a chunk above to narrow it, or use search.</div>}
                 </div>
             );
         }
@@ -3538,26 +3678,27 @@
             return out;
         }
 
-        // Already-slim chunk words (from RTDB) -> the shared component's normalized
-        // shape. Firebase can serialize empty/sparse arrays as keyed objects, so s/a
+        // Already-slim chunk words (from RTDB) -> normalized family row.
+        // Firebase can serialize empty/sparse arrays as keyed objects, so s/a
         // are read with Object.values(...) rather than assumed to already be arrays.
         function mpNormalizeChunkWord(w, i) {
+            const syn = Object.values(w.s || {}).filter(Boolean);
+            const ant = Object.values(w.a || {}).filter(Boolean);
             return {
                 key: `${w.w}-${i}`,
                 w: w.w,
                 m: w.m || '',
                 b: w.b || '',
                 e: w.e || '',
-                syn: Object.values(w.s || {}).filter(Boolean),
-                ant: Object.values(w.a || {}).filter(Boolean),
+                syn,
+                ant,
+                synRaw: syn,
+                antRaw: ant,
             };
         }
 
-        // Picker for rooms/challenges that already have a chunk: choose only from the
-        // chunk's words. Picking a word here never means YOU get tested on it — you're
-        // choosing it for the OTHER person's exam — so showing full detail up front
-        // (meaning, example, synonyms, antonyms, all at once on the right) is safe and
-        // just helps you pick good words; no fairness issue.
+        // Picker for rooms/challenges that already have a chunk: choose from the
+        // chunk's words (and their synonyms/antonyms). Same layout as Word List.
         function MpChunkPicker({ chunk, wordCount, picks, setPicks, locked }) {
             const words = useMemo(() => chunk.map(mpNormalizeChunkWord), [chunk]);
             return <MpWordMasterDetail words={words} pickable wordCount={wordCount} picks={picks} setPicks={setPicks} locked={locked} emptyHint="No words in this chunk." />;
@@ -3775,13 +3916,12 @@
 
         function ChStudy({ chunk, studySec, onDone }) {
             const [left, setLeft] = useState(studySec);
-            const [q, setQ] = useState('');
+            const words = useMemo(() => (chunk || []).map(mpNormalizeChunkWord), [chunk]);
             useEffect(() => {
                 const t = setInterval(() => setLeft(l => l - 1), 1000);
                 return () => clearInterval(t);
             }, []);
             useEffect(() => { if (left <= 0) onDone(); }, [left]);
-            const shown = chunk.filter(w => !q.trim() || String(w.w).toLowerCase().includes(q.trim().toLowerCase()) || String(w.m || '').toLowerCase().includes(q.trim().toLowerCase()));
             return (
                 <div className="space-y-3">
                     <div className="flex items-center gap-2">
@@ -3789,16 +3929,7 @@
                         <span className="px-3 py-1 rounded-full bg-sky-100 text-sky-700 text-xs font-black">{mpFmtClock(Math.max(0, left) * 1000)}</span>
                         <button onClick={onDone} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">I'm ready →</button>
                     </div>
-                    <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search the words…" className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs" />
-                    <div className="max-h-[26rem] overflow-y-auto divide-y divide-slate-100 rounded-xl border border-slate-200">
-                        {shown.map((w, i) => (
-                            <div key={i} className="px-3 py-2">
-                                <div className="text-sm font-black text-slate-800">{w.w}</div>
-                                <div className="text-xs text-slate-600">{w.m}{w.b ? ` · ${w.b}` : ''}</div>
-                                {w.e && <div className="text-[11px] text-slate-400 italic mt-0.5">{w.e}</div>}
-                            </div>
-                        ))}
-                    </div>
+                    <MpWordMasterDetail words={words} pickable={false} emptyHint="No words in this chunk." />
                 </div>
             );
         }
@@ -4783,7 +4914,9 @@
                                     </div>
                                 ) : (
                                     <>
-                                        {chunkWords.length > 0 ? <MpChunkPicker chunk={chunkWords} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={false} /> : <MpWordPicker books={books} allWords={allWords} defaultBookId={activeBookId} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={false} />}
+                                        {chunkWords.length > 0
+                                            ? <MpChunkPicker chunk={chunkWords} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={false} />
+                                            : <MpWordPicker books={books} allWords={allWords} defaultBookId={activeBookId} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={false} chunkSize={chunkSize} />}
                                         <button onClick={lockWords} disabled={myPicks.length !== meta.wordCount} className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-40">🔒 Lock in my words</button>
                                     </>
                                 )}
@@ -4810,17 +4943,17 @@
             </>);
         }
 
-        // SWIPE DECK — phone-gallery style paging for the Word List detail card.
-        // Renders the previous, current and next cards side by side inside a 3x-wide
-        // track, so both neighbours are already loaded and slide into view with the
-        // finger (touch/pen drag) or with the ‹ › buttons. After the slide finishes,
-        // the parent commits the new selection and the track snaps back to centre
-        // with no animation, so the swap is invisible. Desktop mouse users use the
-        // buttons (mouse dragging is left alone so text selection still works).
+        // SWIPE DECK — phone-gallery style paging (Word List detail, multiplayer
+        // study/pick right pane, Flashcards). Renders prev/current/next side by
+        // side in a 3×-wide track so neighbours slide in with the drag. Works on
+        // touch AND mouse (drag anywhere on the card area). Text selection is
+        // suppressed only while an intentional horizontal drag is in progress.
+        // After the slide finishes, the parent commits the new index and the
+        // track snaps back to centre with no animation.
         function SwipeDeck({ prev, cur, next, onPrev, onNext, label }) {
             const wrapRef = useRef(null);
             const trackRef = useRef(null);
-            const g = useRef({ down: false, axis: null, x0: 0, y0: 0, t0: 0, dx: 0, busy: false });
+            const g = useRef({ down: false, axis: null, x0: 0, y0: 0, t0: 0, dx: 0, busy: false, pid: null });
             const hasPrev = !!prev, hasNext = !!next;
 
             const setX = (dx, animate) => {
@@ -4845,21 +4978,29 @@
             };
 
             const onPointerDown = (e) => {
-                if (e.pointerType === 'mouse' || g.current.busy) return;
+                if (g.current.busy) return;
+                // Ignore right-clicks / middle-clicks; allow mouse + touch + pen.
+                if (e.pointerType === 'mouse' && e.button !== 0) return;
+                // Don't start a drag from interactive controls (buttons, inputs).
+                if (e.target && e.target.closest && e.target.closest('button, a, input, textarea, select, label')) return;
                 const s = g.current;
-                s.down = true; s.axis = null; s.x0 = e.clientX; s.y0 = e.clientY; s.t0 = Date.now(); s.dx = 0;
+                s.down = true; s.axis = null; s.x0 = e.clientX; s.y0 = e.clientY; s.t0 = Date.now(); s.dx = 0; s.pid = e.pointerId;
             };
             const onPointerMove = (e) => {
                 const s = g.current;
-                if (!s.down) return;
+                if (!s.down || (s.pid != null && e.pointerId !== s.pid)) return;
                 const dx = e.clientX - s.x0, dy = e.clientY - s.y0;
                 if (!s.axis) {
                     if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
                     s.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
-                    if (s.axis === 'x') { try { wrapRef.current.setPointerCapture(e.pointerId); } catch (_) {} }
+                    if (s.axis === 'x') {
+                        try { wrapRef.current.setPointerCapture(e.pointerId); } catch (_) {}
+                        // Prevent text highlight while dragging horizontally (esp. mouse).
+                        try { document.body.style.userSelect = 'none'; } catch (_) {}
+                    }
                 }
                 if (s.axis !== 'x') return;
-                // rubber-band when there's nothing further in that direction
+                e.preventDefault();
                 const blocked = (dx > 0 && !hasPrev) || (dx < 0 && !hasNext);
                 s.dx = blocked ? dx * 0.25 : dx;
                 setX(s.dx, false);
@@ -4867,12 +5008,17 @@
             const endDrag = (e) => {
                 const s = g.current;
                 if (!s.down) return;
-                s.down = false;
-                if (s.axis !== 'x') return;
-                const w = wrapRef.current.offsetWidth;
-                const v = s.dx / Math.max(1, Date.now() - s.t0); // px per ms
-                if (s.dx < -w * 0.22 || v < -0.45) slideTo(1);
-                else if (s.dx > w * 0.22 || v > 0.45) slideTo(-1);
+                if (e && s.pid != null && e.pointerId !== s.pid) return;
+                const wasAxis = s.axis;
+                const dx = s.dx;
+                const t0 = s.t0;
+                s.down = false; s.axis = null; s.pid = null;
+                try { document.body.style.userSelect = ''; } catch (_) {}
+                if (wasAxis !== 'x') return;
+                const w = wrapRef.current ? wrapRef.current.offsetWidth : 0;
+                const v = dx / Math.max(1, Date.now() - t0);
+                if (dx < -w * 0.18 || v < -0.4) slideTo(1);
+                else if (dx > w * 0.18 || v > 0.4) slideTo(-1);
                 else setX(0, true);
             };
 
@@ -4887,7 +5033,7 @@
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${hasPrev ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}>
                             ‹ Prev
                         </button>
-                        <span className="text-[11px] font-semibold text-slate-400">{label}<span className="hidden sm:inline"> · swipe or use the buttons</span><span className="sm:hidden"> · swipe ↔</span></span>
+                        <span className="text-[11px] font-semibold text-slate-400">{label}<span className="hidden sm:inline"> · drag / swipe anywhere · or buttons</span><span className="sm:hidden"> · swipe ↔</span></span>
                         <button type="button" onClick={() => slideTo(1)} disabled={!hasNext}
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${hasNext ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}>
                             Next ›
@@ -4895,7 +5041,7 @@
                     </div>
                     <div
                         ref={wrapRef}
-                        className="overflow-hidden"
+                        className="overflow-hidden cursor-grab active:cursor-grabbing select-none"
                         style={{ touchAction: 'pan-y' }}
                         onPointerDown={onPointerDown}
                         onPointerMove={onPointerMove}
@@ -5338,6 +5484,23 @@
 
             // TAB & NAVIGATION STATE
             const [activeTab, setActiveTab] = useState('list');
+            // App chrome: "classic" = original top tabs; "menu" = home hub + side/hamburger nav.
+            const [shellLayout, setShellLayout] = useState(() => {
+                try { return localStorage.getItem('wordsmart_shell_layout') === 'menu' ? 'menu' : 'classic'; } catch (e) { return 'classic'; }
+            });
+            const [menuOpen, setMenuOpen] = useState(false);
+            useEffect(() => { try { localStorage.setItem('wordsmart_shell_layout', shellLayout); } catch (e) {} }, [shellLayout]);
+            const APP_NAV_TABS = [
+                { id: 'home', label: '🏠 Home', desc: 'Overview', menuOnly: true },
+                { id: 'list', label: '📖 Word List', desc: 'Browse & Study' },
+                { id: 'flashcards', label: '🎴 Flashcards', desc: 'Memorize & Flip' },
+                { id: 'quiz', label: '🧠 Practice Quiz', desc: 'Test Knowledge' },
+                { id: 'game', label: '🎮 Word Quest', desc: 'Canvas Arena & Bosses' },
+                { id: 'multi', label: '🌐 Multiplayer', desc: 'Play with friends' },
+                { id: 'stats', label: '📊 Stats & Streak', desc: 'Progress & Activity' },
+                { id: 'manage', label: '⚙️ Word Manager', desc: 'Pages & Import' },
+            ];
+            const goTab = (id) => { setActiveTab(id); setMenuOpen(false); };
             const [searchQuery, setSearchQuery] = useState('');
             // Multi-select: empty array = no filter (show every status)
             const [filterFamiliarities, setFilterFamiliarities] = useState([]);
@@ -7485,10 +7648,78 @@ Rules:
                 );
             };
 
+            const navTabsForShell = APP_NAV_TABS.filter((t) => shellLayout === 'menu' || !t.menuOnly);
+            const renderMenuNav = (compact = false) => (
+                <nav className={compact ? 'space-y-1' : 'space-y-1.5'}>
+                    {navTabsForShell.map((tab) => (
+                        <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => goTab(tab.id)}
+                            className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${
+                                activeTab === tab.id
+                                    ? 'bg-indigo-600 text-white shadow'
+                                    : 'text-slate-700 hover:bg-slate-100'
+                            }`}
+                        >
+                            <span className="truncate">{tab.label}</span>
+                        </button>
+                    ))}
+                    <button
+                        type="button"
+                        onClick={() => { setMenuOpen(false); setShowProfileModal(true); }}
+                        className="w-full text-left px-3 py-2.5 rounded-xl text-sm font-bold text-slate-700 hover:bg-slate-100"
+                    >
+                        👤 Profile
+                    </button>
+                </nav>
+            );
+
             return (
-                <div className="min-h-screen">
-                    <div className="max-w-[1600px] mx-auto px-4 py-6 relative">
-                    {}
+                <div className={`min-h-screen ${shellLayout === 'menu' ? 'md:pl-60' : ''}`}>
+                    {shellLayout === 'menu' && (
+                        <>
+                            <aside className="hidden md:flex fixed left-0 top-0 bottom-0 w-60 z-30 flex-col bg-white border-r border-slate-200 shadow-sm p-4 gap-4">
+                                <div>
+                                    <div className="text-xs font-black uppercase tracking-widest text-indigo-500">Vocabulation</div>
+                                    <div className="text-base font-black text-slate-900 truncate mt-0.5">{activeBook.name}</div>
+                                </div>
+                                <div className="flex-1 overflow-y-auto">{renderMenuNav()}</div>
+                                <button
+                                    type="button"
+                                    onClick={() => { setShellLayout('classic'); setActiveTab((t) => t === 'home' ? 'list' : t); }}
+                                    className="text-[11px] font-bold text-slate-400 hover:text-indigo-600 text-left"
+                                >
+                                    Switch to classic tabs →
+                                </button>
+                            </aside>
+                            <div className="md:hidden sticky top-0 z-40 bg-indigo-950 text-white px-3 py-2.5 flex items-center gap-2 shadow-lg">
+                                <button type="button" onClick={() => setMenuOpen(true)} className="w-10 h-10 rounded-xl bg-white/10 border border-white/20 font-black text-lg" aria-label="Open menu">☰</button>
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-200">Vocabulation</div>
+                                    <div className="text-sm font-black truncate">{activeBook.name}</div>
+                                </div>
+                                {cloudUser && (
+                                    <button type="button" onClick={() => setShowProfileModal(true)} className="w-9 h-9 rounded-full overflow-hidden border border-white/30 shrink-0">
+                                        {cloudUser.photoURL ? <img src={cloudUser.photoURL} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <span className="text-xs font-black">👤</span>}
+                                    </button>
+                                )}
+                            </div>
+                            {menuOpen && (
+                                <div className="md:hidden fixed inset-0 z-50">
+                                    <div className="absolute inset-0 bg-slate-900/50" onClick={() => setMenuOpen(false)} />
+                                    <div className="absolute left-0 top-0 bottom-0 w-[82%] max-w-xs bg-white shadow-2xl p-4 flex flex-col gap-3">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-sm font-black text-slate-900">Menu</span>
+                                            <button type="button" onClick={() => setMenuOpen(false)} className="w-8 h-8 rounded-full bg-slate-100 font-bold text-slate-500">✕</button>
+                                        </div>
+                                        <div className="flex-1 overflow-y-auto">{renderMenuNav(true)}</div>
+                                    </div>
+                                </div>
+                            )}
+                        </>
+                    )}
+                    <div className={`max-w-[1600px] mx-auto px-3 sm:px-4 ${shellLayout === 'menu' ? 'py-3 sm:py-5' : 'py-4 sm:py-6'} relative`}>
                     {toastMessage && (
                         <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 text-sm font-medium flex items-center gap-2 animate-bounce">
                             <span>💡</span>
@@ -8503,32 +8734,31 @@ Rules:
                         </div>
                     )}
 
-                    {/* APP HEADER */}
-                    <header className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 rounded-2xl p-4 text-white shadow-xl mb-4">
-                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                            <div>
-                                {/* PAGE / BOOK SWITCHER */}
-                                <div className="flex flex-wrap items-center gap-2 mb-2">
-                                    <div className="bg-white/10 p-1 rounded-xl border border-white/20 flex flex-wrap gap-1 items-center">
+                    {/* APP HEADER — tighter on phone; in menu layout the brand lives in the side bar so this becomes a compact book/stats strip */}
+                    <header className={`bg-gradient-to-br from-indigo-900 via-blue-900 to-slate-900 rounded-2xl text-white shadow-xl mb-3 sm:mb-4 ${shellLayout === 'menu' ? 'p-3 sm:p-4' : 'p-3 sm:p-4'}`}>
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 md:gap-4">
+                            <div className="w-full md:w-auto min-w-0">
+                                {/* PAGE / BOOK SWITCHER — horizontal scroll on phone so it doesn't stack dullly */}
+                                <div className="flex items-center gap-2 mb-1.5 sm:mb-2">
+                                    <div className="bg-white/10 p-1 rounded-xl border border-white/20 flex gap-1 items-center overflow-x-auto max-w-full scrollbar-thin">
                                         {books.map(b => (
                                             <button
                                                 key={b.id}
                                                 onClick={() => { setSelectedBookId(b.id); setSelectedChunks([]); }}
-                                                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                                className={`px-2.5 sm:px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 ${
                                                     selectedBookId === b.id
                                                         ? 'keep-white bg-white text-indigo-900 shadow-sm'
                                                         : 'text-indigo-200 hover:text-white'
                                                 }`}
                                             >
                                                 <span>📖 {b.name}</span>
-                                                <span className="opacity-75 font-normal text-[10px]">({(allWords[b.id] || []).length}/{b.targetCount || 500})</span>
+                                                <span className="opacity-75 font-normal text-[10px] hidden sm:inline">({(allWords[b.id] || []).length}/{b.targetCount || 500})</span>
                                             </button>
                                         ))}
 
-                                        {/* ADD PAGE BUTTON */}
                                         <button
                                             onClick={() => setShowAddPageModal(true)}
-                                            className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/30 hover:bg-emerald-500/50 text-emerald-100 border border-emerald-400/30 transition-all flex items-center gap-1"
+                                            className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/30 hover:bg-emerald-500/50 text-emerald-100 border border-emerald-400/30 transition-all flex items-center gap-1 shrink-0"
                                             title="Add new custom page"
                                         >
                                             <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" strokeWidth="2.5" stroke="currentColor">
@@ -8537,10 +8767,9 @@ Rules:
                                         </button>
                                     </div>
 
-                                    {/* RENAME ACTIVE PAGE */}
                                     <button
                                         onClick={() => setEditingPageObj({ ...activeBook })}
-                                        className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-indigo-100 border border-white/20 text-xs transition-all flex items-center gap-1"
+                                        className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-indigo-100 border border-white/20 text-xs transition-all flex items-center gap-1 shrink-0"
                                         title="Rename active page"
                                     >
                                         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
@@ -8549,15 +8778,12 @@ Rules:
                                     </button>
                                 </div>
 
-                                {/* APP TITLE + WELCOME MESSAGE — grouped together with even
-                                    spacing above (from the switcher row) and below (to the
-                                    header's own padding), so the block doesn't look lopsided. */}
-                                <div className="mt-1">
-                                    <h1 className="text-xl md:text-2xl font-extrabold tracking-tight flex items-center gap-2">
+                                <div className="mt-0.5">
+                                    <h1 className={`font-extrabold tracking-tight ${shellLayout === 'menu' ? 'text-lg sm:text-xl' : 'text-lg sm:text-2xl'}`}>
                                         <span>{activeBook.name} Companion</span>
                                     </h1>
-                                    <p className="text-indigo-200/80 text-xs sm:text-sm font-medium mt-1">
-                                        Welcome back{(typeof displayName === 'string' && displayName && displayName !== 'Guest') ? ', ' + displayName.split(' ')[0] : ''}! Ready to grow your vocabulary today? ✨
+                                    <p className="text-indigo-200/80 text-[11px] sm:text-sm font-medium mt-0.5 sm:mt-1 line-clamp-2">
+                                        Welcome{(typeof displayName === 'string' && displayName && displayName !== 'Guest') ? ', ' + displayName.split(' ')[0] : ''} — keep your streak alive.
                                     </p>
                                 </div>
                             </div>
@@ -8606,22 +8832,15 @@ Rules:
                             </div>
                         </div>
 
-                        {/* NAVIGATION TABS + ACCOUNT */}
-                        <div className="flex flex-wrap items-center gap-3 mt-6 pt-4 border-t border-indigo-500/30">
-                            <div className="flex flex-wrap gap-2 flex-1 min-w-0">
-                                {[
-                                    { id: 'list', label: '📖 Word List', desc: 'Browse & Study' },
-                                    { id: 'flashcards', label: '🎴 Flashcards', desc: 'Memorize & Flip' },
-                                    { id: 'quiz', label: '🧠 Practice Quiz', desc: 'Test Knowledge' },
-                                    { id: 'game', label: '🎮 Word Quest', desc: 'Canvas Arena & Bosses' },
-                                    { id: 'multi', label: '🌐 Multiplayer', desc: 'Play with friends' },
-                                    { id: 'stats', label: '📊 Stats & Streak', desc: 'Progress & Activity' },
-                                    { id: 'manage', label: '⚙️ Word Manager', desc: 'Pages & Import' }
-                                ].map(tab => (
+                        {/* NAVIGATION TABS + ACCOUNT — classic layout only (menu layout uses the side/hamburger nav) */}
+                        <div className={`flex flex-wrap items-center gap-3 pt-3 sm:pt-4 border-t border-indigo-500/30 ${shellLayout === 'menu' ? 'mt-3' : 'mt-4 sm:mt-6'}`}>
+                            {shellLayout === 'classic' && (
+                            <div className="flex gap-1.5 sm:gap-2 flex-1 min-w-0 overflow-x-auto pb-1 -mx-1 px-1">
+                                {APP_NAV_TABS.filter((t) => !t.menuOnly).map(tab => (
                                     <button
                                         key={tab.id}
                                         onClick={() => setActiveTab(tab.id)}
-                                        className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-xl text-xs font-bold transition-all duration-200 flex flex-col items-center justify-center ${
+                                        className={`shrink-0 sm:flex-1 min-w-[7.25rem] py-2 sm:py-2.5 px-2.5 sm:px-3 rounded-xl text-[11px] sm:text-xs font-bold transition-all duration-200 flex flex-col items-center justify-center ${
                                             activeTab === tab.id
                                                 ? 'keep-white bg-white text-indigo-900 shadow-lg scale-[1.02]'
                                                 : 'bg-indigo-950/40 text-indigo-100 hover:bg-indigo-800/60 border border-indigo-400/20'
@@ -8631,6 +8850,12 @@ Rules:
                                     </button>
                                 ))}
                             </div>
+                            )}
+                            {shellLayout === 'menu' && (
+                                <div className="flex-1 min-w-0 text-[11px] sm:text-xs font-semibold text-indigo-100/80">
+                                    {APP_NAV_TABS.find((t) => t.id === activeTab)?.label || 'Home'} · use the menu to switch sections
+                                </div>
+                            )}
 
                             {/* NOTIFICATIONS BELL — pokes, room invites, and challenges needing
                                 your attention, visible from anywhere, not just the Multiplayer
@@ -9189,79 +9414,44 @@ Rules:
                                     </label>
                                 </div>
                                 <span className="text-xs font-semibold text-slate-500">
-                                    Card {cardIndex + 1} of {playablePool.length} · click flip · drag slide
+                                    Card {cardIndex + 1} of {playablePool.length} · click flip · gallery swipe
                                 </span>
                             </div>
 
-                            {/* FLIP CARD — click flips, horizontal drag goes next/prev */}
+                            {/* FLIP CARD inside gallery SwipeDeck — same slide as Word List */}
+                            {(() => {
+                                const n = playablePool.length;
+                                const prevIdx = n > 1 ? (cardIndex - 1 + n) % n : null;
+                                const nextIdx = n > 1 ? (cardIndex + 1) % n : null;
+                                const flashPreview = (item) => (
+                                    <div className="relative w-full rounded-2xl shadow-xl bg-gradient-to-br from-indigo-800 to-slate-900 text-white flex flex-col items-center justify-center gap-2" style={{ height: `${FLASHCARD_BASE_HEIGHT}px` }}>
+                                        <h2 className="text-3xl font-extrabold tracking-wide px-4 text-center">{item.word}</h2>
+                                        {fieldVisibility.phonetics && item.phonetics && (
+                                            <p className="text-indigo-200 font-mono text-sm">[{item.phonetics}]</p>
+                                        )}
+                                    </div>
+                                );
+                                const goFlash = (dir) => {
+                                    setIsFlipped(false);
+                                    setCardDetailsExpanded(false);
+                                    setCardSlideDir(dir);
+                                    setCardIndex((prev) => dir === 'next'
+                                        ? (prev < n - 1 ? prev + 1 : 0)
+                                        : (prev > 0 ? prev - 1 : n - 1));
+                                };
+                                return (
+                            <SwipeDeck
+                                label={`Card ${cardIndex + 1} / ${n}`}
+                                prev={prevIdx != null ? { node: flashPreview(playablePool[prevIdx]) } : null}
+                                next={nextIdx != null ? { node: flashPreview(playablePool[nextIdx]) } : null}
+                                onPrev={() => goFlash('prev')}
+                                onNext={() => goFlash('next')}
+                                cur={
                             <div 
                                 data-flip-btn
-                                onClick={() => {
-                                    if (flashDragRef.current.swiped) {
-                                        flashDragRef.current.swiped = false;
-                                        return;
-                                    }
-                                    setIsFlipped(!isFlipped);
-                                }}
-                                onPointerDown={(e) => {
-                                    flashDragRef.current = { active: true, startX: e.clientX, dx: 0, swiped: false };
-                                    e.currentTarget.setPointerCapture?.(e.pointerId);
-                                    if (cardDragElRef.current) cardDragElRef.current.style.transition = 'none';
-                                }}
-                                onPointerMove={(e) => {
-                                    if (!flashDragRef.current.active) return;
-                                    const dx = e.clientX - flashDragRef.current.startX;
-                                    flashDragRef.current.dx = dx;
-                                    const el = cardDragElRef.current;
-                                    if (el) {
-                                        const shrink = Math.max(1 - Math.abs(dx) / 800, 0.9);
-                                        const fade = Math.max(1 - Math.abs(dx) / 350, 0.35);
-                                        el.style.transform = `translateX(${dx}px) scale(${shrink})`;
-                                        el.style.opacity = String(fade);
-                                    }
-                                }}
-                                onPointerUp={() => {
-                                    const dx = flashDragRef.current.dx || 0;
-                                    flashDragRef.current.active = false;
-                                    const el = cardDragElRef.current;
-                                    if (Math.abs(dx) >= 60) {
-                                        flashDragRef.current.swiped = true;
-                                        const dir = dx < 0 ? 'next' : 'prev';
-                                        // Finish the swipe: shrink and fade the current card the rest
-                                        // of the way off-screen, then swap to the next/previous card
-                                        // once it's gone — which plays its own entrance animation.
-                                        if (el) {
-                                            el.style.transition = 'transform 0.34s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.34s ease';
-                                            el.style.transform = `translateX(${dx < 0 ? -420 : 420}px) scale(0.82)`;
-                                            el.style.opacity = '0';
-                                        }
-                                        setCardSlideDir(dir);
-                                        setIsFlipped(false);
-                                        setTimeout(() => {
-                                            setCardIndex((prev) => dir === 'next'
-                                                ? (prev < playablePool.length - 1 ? prev + 1 : 0)
-                                                : (prev > 0 ? prev - 1 : playablePool.length - 1));
-                                        }, 280);
-                                    } else if (el) {
-                                        // Didn't drag far enough — smoothly snap back to center.
-                                        el.style.transition = 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.28s ease';
-                                        el.style.transform = 'translateX(0) scale(1)';
-                                        el.style.opacity = '1';
-                                    }
-                                    flashDragRef.current.dx = 0;
-                                }}
-                                onPointerCancel={() => {
-                                    flashDragRef.current = { active: false, startX: 0, dx: 0, swiped: false };
-                                    const el = cardDragElRef.current;
-                                    if (el) {
-                                        el.style.transition = 'transform 0.28s ease, opacity 0.28s ease';
-                                        el.style.transform = 'translateX(0) scale(1)';
-                                        el.style.opacity = '1';
-                                    }
-                                }}
-                                ref={cardDragElRef}
+                                onClick={() => setIsFlipped(!isFlipped)}
                                 key={cardIndex}
-                                className={`relative w-full cursor-pointer perspective-1000 touch-pan-y select-none ${cardSlideDir === 'next' ? 'flash-slide-next' : 'flash-slide-prev'}`}
+                                className="relative w-full cursor-pointer perspective-1000 select-none"
                                 style={{
                                     height: `${(isFlipped && cardDetailsExpanded ? FLASHCARD_EXPANDED_HEIGHT + flashcardExtraHeight : FLASHCARD_BASE_HEIGHT)}px`,
                                     transition: 'height 0.4s cubic-bezier(0.4, 0, 0.2, 1)'
@@ -9443,11 +9633,15 @@ Rules:
                                     </div>
                                 )}
                             </div>
+                                }
+                            />
+                                );
+                            })()}
 
                             <div className="flex justify-between items-center gap-4">
                                 <button
                                     data-flash-prev
-                                    onClick={() => { setCardSlideDir('prev'); setIsFlipped(false); setCardIndex((prev) => (prev > 0 ? prev - 1 : playablePool.length - 1)); }}
+                                    onClick={() => { setCardSlideDir('prev'); setIsFlipped(false); setCardDetailsExpanded(false); setCardIndex((prev) => (prev > 0 ? prev - 1 : playablePool.length - 1)); }}
                                     className="flex-1 py-3 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl shadow-sm hover:bg-slate-50 active:scale-95 transition-all"
                                 >
                                     ← Previous
@@ -10203,24 +10397,47 @@ Rules:
                     {/* MODE 5: MANAGE PAGES, RESTORE TRASH & UNIFIED JSON IMPORT */}
                     {activeTab === 'manage' && (
                         <div className="space-y-4">
-                            {/* APPEARANCE — one compact row: theme + sound switch */}
-                            <div className={`rounded-2xl border shadow-sm p-4 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'} flex flex-col md:flex-row md:items-center gap-3 md:gap-6`}>
-                                <h2 className="text-lg font-extrabold flex items-center gap-2 shrink-0"><span>🎨</span> Appearance</h2>
-                                <div className="flex flex-wrap items-center gap-3 flex-1 md:justify-end">
-                                    <div className={`inline-flex p-1 rounded-xl border gap-1 ${appTheme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/60 border-slate-700'}`}>
-                                        {['midnight', 'light'].map(themeOption => (
-                                            <button
-                                                key={themeOption}
-                                                type="button"
-                                                onClick={() => setAppTheme(themeOption)}
-                                                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${appTheme === themeOption ? 'bg-indigo-600 text-white shadow' : appTheme === 'light' ? 'text-slate-600 hover:bg-slate-200' : 'text-slate-300 hover:bg-white/10'}`}
-                                            >
-                                                {themeOption === 'midnight' ? '🌙 Midnight' : '☀️ Light'}
-                                            </button>
-                                        ))}
+                            {/* APPEARANCE — theme + layout chrome + sound */}
+                            <div className={`rounded-2xl border shadow-sm p-4 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'} space-y-3`}>
+                                <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-6">
+                                    <h2 className="text-lg font-extrabold flex items-center gap-2 shrink-0"><span>🎨</span> Appearance</h2>
+                                    <div className="flex flex-wrap items-center gap-3 flex-1 md:justify-end">
+                                        <div className={`inline-flex p-1 rounded-xl border gap-1 ${appTheme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/60 border-slate-700'}`}>
+                                            {['midnight', 'light'].map(themeOption => (
+                                                <button
+                                                    key={themeOption}
+                                                    type="button"
+                                                    onClick={() => setAppTheme(themeOption)}
+                                                    className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${appTheme === themeOption ? 'bg-indigo-600 text-white shadow' : appTheme === 'light' ? 'text-slate-600 hover:bg-slate-200' : 'text-slate-300 hover:bg-white/10'}`}
+                                                >
+                                                    {themeOption === 'midnight' ? '🌙 Midnight' : '☀️ Light'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <div className="w-full sm:w-64" title="Master sound switch: when OFF, all gameplay and quiz sounds are muted.">
+                                            <ToggleRow label="All Sounds" checked={globalSound} onToggle={() => setGlobalSound(v => !v)} appTheme={appTheme} />
+                                        </div>
                                     </div>
-                                    <div className="w-full sm:w-64" title="Master sound switch: when OFF, all gameplay and quiz sounds are muted.">
-                                        <ToggleRow label="All Sounds" checked={globalSound} onToggle={() => setGlobalSound(v => !v)} appTheme={appTheme} />
+                                </div>
+                                <div className={`rounded-xl border p-3 ${appTheme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/15'}`}>
+                                    <div className="text-[11px] font-extrabold uppercase tracking-wider opacity-70 mb-2">Layout / design view</div>
+                                    <div className="grid sm:grid-cols-2 gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => { setShellLayout('classic'); if (activeTab === 'home') setActiveTab('list'); }}
+                                            className={`text-left p-3 rounded-xl border-2 transition-all ${shellLayout === 'classic' ? 'border-indigo-500 bg-indigo-50 text-slate-900' : 'border-transparent bg-white/80 text-slate-700 hover:border-slate-300'}`}
+                                        >
+                                            <div className="text-sm font-black">Classic tabs</div>
+                                            <div className="text-[11px] mt-0.5 opacity-70">Original top tab bar — all sections in one row.</div>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => { setShellLayout('menu'); setActiveTab('home'); }}
+                                            className={`text-left p-3 rounded-xl border-2 transition-all ${shellLayout === 'menu' ? 'border-indigo-500 bg-indigo-50 text-slate-900' : 'border-transparent bg-white/80 text-slate-700 hover:border-slate-300'}`}
+                                        >
+                                            <div className="text-sm font-black">Menu + Home</div>
+                                            <div className="text-[11px] mt-0.5 opacity-70">Side menu (PC) / hamburger (phone) with a home hub. Same features, different chrome.</div>
+                                        </button>
                                     </div>
                                 </div>
                             </div>
