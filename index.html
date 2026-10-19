@@ -3403,76 +3403,126 @@
         }
 
         // ---------- Word picker used in the lobby ----------
-        function MpWordPicker({ books, allWords, defaultBookId, wordCount, picks, setPicks, locked }) {
-            const [bookId, setBookId] = useState(defaultBookId || (books[0] && books[0].id));
-            const [search, setSearch] = useState('');
-            const [openId, setOpenId] = useState(null);
-            const list = (allWords[bookId] || []);
-            const keyOf = (w) => String(w.word || '').trim().toLowerCase();
-            const relatedNames = (rel) => (Array.isArray(rel) ? rel : [])
-                .map(x => (typeof x === 'string' ? x : (x && (x.word || x.text)) || ''))
-                .map(x => String(x).trim()).filter(Boolean).slice(0, 3);
-            const picked = new Set(picks.map(p => p.w.toLowerCase()));
-            const q = search.trim().toLowerCase();
-            const shown = list.filter(w => w.word && (!q || String(w.word).toLowerCase().includes(q))).slice(0, 80);
+        // ---------- Shared master-detail word browser/picker ----------
+        // Same shape as the main Word List tab: a compact list on the left (tap a
+        // word to preview it), the FULL card — meaning, example, synonyms, antonyms,
+        // all visible at once, no tap-to-expand — on the right for whichever word is
+        // selected. `words` must already be normalized to { key, w, m, b, e, syn[],
+        // ant[] } by the caller, so this one component can serve chunks (slim RTDB
+        // shape) and full local word objects alike. `pickable=false` makes it a
+        // read-only browser (used for Study phase when the host picks for you).
+        function MpWordMasterDetail({ words, pickable = false, wordCount = 0, picks, setPicks, locked, emptyHint = 'No words here.' }) {
+            const [q, setQ] = useState('');
+            const [selectedKey, setSelectedKey] = useState(words[0] ? words[0].key : null);
+            const filtered = useMemo(() => {
+                const qq = q.trim().toLowerCase();
+                return !qq ? words : words.filter(w => w.w.toLowerCase().includes(qq) || (w.m || '').toLowerCase().includes(qq));
+            }, [words, q]);
+            useEffect(() => {
+                if (!filtered.some(w => w.key === selectedKey)) setSelectedKey(filtered[0] ? filtered[0].key : null);
+            }, [filtered.map(w => w.key).join(',')]);
+            const picked = new Set((picks || []).map(p => p.w.toLowerCase()));
             const toggle = (w) => {
-                if (locked) return;
-                const k = keyOf(w);
+                if (!pickable || locked) return;
+                const k = w.w.toLowerCase();
                 if (picked.has(k)) setPicks(picks.filter(p => p.w.toLowerCase() !== k));
-                else if (picks.length < wordCount) setPicks([...picks, mpSlimWord(w)]);
+                else if (picks.length < wordCount) setPicks([...picks, { w: w.w, m: w.m, b: w.b, e: w.e, s: w.syn, a: w.ant }]);
             };
             const randomFill = () => {
-                if (locked) return;
-                const have = new Set(picks.map(p => p.w.toLowerCase()));
-                const candidates = list.filter(w => w.word && !have.has(keyOf(w)) && (w.meaning_en || w.meaning));
-                const rnd = Math.random;
-                const need = wordCount - picks.length;
-                setPicks([...picks, ...mpShuffle(candidates, rnd).slice(0, need).map(mpSlimWord)]);
+                if (!pickable || locked) return;
+                const rest = words.filter(w => !picked.has(w.w.toLowerCase()));
+                setPicks([...picks, ...mpShuffle(rest, Math.random).slice(0, wordCount - picks.length).map(w => ({ w: w.w, m: w.m, b: w.b, e: w.e, s: w.syn, a: w.ant }))]);
             };
+            const selected = filtered.find(w => w.key === selectedKey) || filtered[0] || null;
             return (
                 <div className="space-y-2">
-                    <div className="flex gap-2 flex-wrap">
-                        <select value={bookId} onChange={(e) => setBookId(e.target.value)} disabled={locked} className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 bg-white">
-                            {books.map(b => <option key={b.id} value={b.id}>{b.name} ({(allWords[b.id] || []).length})</option>)}
-                        </select>
-                        <input value={search} onChange={(e) => setSearch(e.target.value)} disabled={locked} placeholder="Search words…" className="flex-1 min-w-[120px] px-3 py-2 rounded-lg border border-slate-300 text-xs text-slate-700 bg-white" />
-                        <button onClick={randomFill} disabled={locked || picks.length >= wordCount} className="px-3 py-2 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold hover:bg-amber-200 disabled:opacity-40">🎲 Random fill</button>
-                        <button onClick={() => setPicks([])} disabled={locked || !picks.length} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 disabled:opacity-40">Clear</button>
+                    <div className="flex gap-2 flex-wrap items-center">
+                        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="flex-1 min-w-[120px] px-3 py-1.5 rounded-lg border border-slate-300 text-xs text-slate-700" />
+                        {pickable && (
+                            <>
+                                <button type="button" onClick={randomFill} disabled={locked || picks.length >= wordCount} className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold hover:bg-amber-200 disabled:opacity-40">🎲 Fill randomly</button>
+                                <button type="button" onClick={() => setPicks([])} disabled={locked || !picks.length} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 disabled:opacity-40">Clear</button>
+                            </>
+                        )}
                     </div>
-                    <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
-                        {shown.length === 0 && <div className="p-4 text-xs text-slate-400 text-center">No words here.</div>}
-                        {shown.map((w, i) => {
-                            const on = picked.has(keyOf(w));
-                            const isOpen = openId === (w.id || i);
-                            const syn = relatedNames(w.synonyms);
-                            const ant = relatedNames(w.antonyms);
-                            const meaning = w.meaning_en || w.meaning || '';
-                            return (
-                                <div key={`${w.id}-${i}`} className={on ? 'bg-indigo-50' : ''}>
-                                    <div className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${!on ? 'hover:bg-slate-50' : ''}`}>
-                                        <button type="button" onClick={() => toggle(w)} disabled={locked || (!on && picks.length >= wordCount)} className="flex items-center gap-2 flex-1 min-w-0 text-left disabled:opacity-60">
-                                            <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] font-black shrink-0 ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'}`}>{on ? '✓' : ''}</span>
-                                            <span className="font-extrabold text-slate-800 shrink-0">{w.word}</span>
-                                            <span className="text-slate-400 truncate">{meaning}</span>
-                                        </button>
-                                        <button type="button" onClick={() => setOpenId(isOpen ? null : (w.id || i))} className="shrink-0 text-slate-400 hover:text-indigo-600 text-[11px] font-bold px-1.5 py-0.5" title="Show full detail">
-                                            {isOpen ? '▲' : '▾'}
+                    <div className="grid md:grid-cols-2 gap-3">
+                        {/* LEFT: compact list — tap a word to preview it on the right; tap ✓ to pick it */}
+                        <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+                            {filtered.length === 0 && <div className="p-4 text-xs text-slate-400 text-center">{emptyHint}</div>}
+                            {filtered.map((w) => {
+                                const on = pickable && picked.has(w.w.toLowerCase());
+                                const isSel = selectedKey === w.key;
+                                return (
+                                    <div key={w.key} className={`flex items-center gap-2 px-3 py-2 text-xs transition-colors ${isSel ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}>
+                                        {pickable && (
+                                            <button type="button" onClick={() => toggle(w)} disabled={locked || (!on && picks.length >= wordCount)} className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] font-black shrink-0 ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'}`}>{on ? '✓' : ''}</button>
+                                        )}
+                                        <button type="button" onClick={() => setSelectedKey(w.key)} className="flex-1 min-w-0 text-left flex items-center gap-2">
+                                            <span className={`font-extrabold shrink-0 ${isSel ? 'text-indigo-700' : 'text-slate-800'}`}>{w.w}</span>
+                                            <span className="text-slate-400 truncate">{w.m || ''}</span>
                                         </button>
                                     </div>
-                                    {isOpen && (
-                                        <div className="px-3 pb-2.5 -mt-0.5 text-[11px] space-y-1">
-                                            {w.meaning_bn && <div className="font-semibold text-indigo-700">{w.meaning_bn}</div>}
-                                            {meaning && <div className="text-slate-600">{meaning}</div>}
-                                            {w.example_main && <div className="italic text-slate-400">“{w.example_main}”</div>}
-                                            {syn.length > 0 && <div className="text-emerald-700"><b>Synonyms:</b> {syn.join(', ')}</div>}
-                                            {ant.length > 0 && <div className="text-rose-600"><b>Antonyms:</b> {ant.join(', ')}</div>}
+                                );
+                            })}
+                        </div>
+                        {/* RIGHT: full card for the selected word — everything visible at once */}
+                        <div className="rounded-xl border border-slate-200 bg-white p-4 max-h-72 overflow-y-auto">
+                            {selected ? (
+                                <div className="space-y-2.5">
+                                    <div className="text-base font-black text-slate-800">{selected.w}</div>
+                                    {selected.b && <div className="text-sm font-semibold text-indigo-700">{selected.b}</div>}
+                                    {selected.m && <div className="text-sm text-slate-600">{selected.m}</div>}
+                                    {selected.e && <div className="text-sm italic text-slate-400">“{selected.e}”</div>}
+                                    {selected.syn.length > 0 && (
+                                        <div>
+                                            <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Synonyms</span>
+                                            <div className="text-sm text-emerald-700 mt-0.5">{selected.syn.join(', ')}</div>
+                                        </div>
+                                    )}
+                                    {selected.ant.length > 0 && (
+                                        <div>
+                                            <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">Antonyms</span>
+                                            <div className="text-sm text-rose-600 mt-0.5">{selected.ant.join(', ')}</div>
                                         </div>
                                     )}
                                 </div>
-                            );
-                        })}
+                            ) : <div className="text-xs text-slate-400 text-center py-10">Select a word to preview it here.</div>}
+                        </div>
                     </div>
-                    {list.length > 80 && !q && <div className="text-[10px] text-slate-400">Showing the first 80 — use search to find others.</div>}
+                </div>
+            );
+        }
+
+        // Full local word objects -> the shared component's normalized shape (used by
+        // MpWordPicker, where the source is the person's own rich book data).
+        function mpNormalizeFullWord(w, i) {
+            const relatedNames = (rel) => (Array.isArray(rel) ? rel : [])
+                .map(x => (typeof x === 'string' ? x : (x && (x.word || x.text)) || ''))
+                .map(x => String(x).trim()).filter(Boolean).slice(0, 3);
+            return {
+                key: `${w.id}-${i}`,
+                w: w.word,
+                m: w.meaning_en || w.meaning || '',
+                b: w.meaning_bn || '',
+                e: w.example_main || '',
+                syn: relatedNames(w.synonyms),
+                ant: relatedNames(w.antonyms),
+            };
+        }
+
+        // Picker that browses a person's full local book(s) (not yet narrowed to a
+        // chunk) — used when creating a room/challenge without a chunk pre-selected.
+        function MpWordPicker({ books, allWords, defaultBookId, wordCount, picks, setPicks, locked }) {
+            const [bookId, setBookId] = useState(defaultBookId || (books[0] && books[0].id));
+            const list = (allWords[bookId] || []);
+            const words = useMemo(() => list.filter(w => w.word).slice(0, 200).map(mpNormalizeFullWord), [list]);
+            return (
+                <div className="space-y-2">
+                    <select value={bookId} onChange={(e) => setBookId(e.target.value)} disabled={locked} className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 bg-white">
+                        {books.map(b => <option key={b.id} value={b.id}>{b.name} ({(allWords[b.id] || []).length})</option>)}
+                    </select>
+                    <MpWordMasterDetail words={words} pickable wordCount={wordCount} picks={picks} setPicks={setPicks} locked={locked} emptyHint="No words here." />
+                    {list.length > 200 && <div className="text-[10px] text-slate-400">Showing the first 200 — use the search box to find others.</div>}
                 </div>
             );
         }
@@ -3488,82 +3538,46 @@
             return out;
         }
 
-        // Picker for rooms that have a chunk: choose only from the chunk's (already slim) words.
-        // Tapping the row toggles the pick; a separate ▾ button expands full detail
-        // (meaning, example, synonyms, antonyms) in place — picking a word here never
-        // means YOU get tested on it (you're choosing it for the other person's exam),
-        // so showing everything up front is safe and just helps you pick good words.
+        // Already-slim chunk words (from RTDB) -> the shared component's normalized
+        // shape. Firebase can serialize empty/sparse arrays as keyed objects, so s/a
+        // are read with Object.values(...) rather than assumed to already be arrays.
+        function mpNormalizeChunkWord(w, i) {
+            return {
+                key: `${w.w}-${i}`,
+                w: w.w,
+                m: w.m || '',
+                b: w.b || '',
+                e: w.e || '',
+                syn: Object.values(w.s || {}).filter(Boolean),
+                ant: Object.values(w.a || {}).filter(Boolean),
+            };
+        }
+
+        // Picker for rooms/challenges that already have a chunk: choose only from the
+        // chunk's words. Picking a word here never means YOU get tested on it — you're
+        // choosing it for the OTHER person's exam — so showing full detail up front
+        // (meaning, example, synonyms, antonyms, all at once on the right) is safe and
+        // just helps you pick good words; no fairness issue.
         function MpChunkPicker({ chunk, wordCount, picks, setPicks, locked }) {
-            const [openWord, setOpenWord] = useState(null);
-            const picked = new Set(picks.map(p => p.w.toLowerCase()));
-            const toggle = (w) => {
-                if (locked) return;
-                const k = w.w.toLowerCase();
-                if (picked.has(k)) setPicks(picks.filter(p => p.w.toLowerCase() !== k));
-                else if (picks.length < wordCount) setPicks([...picks, w]);
-            };
-            const randomFill = () => {
-                if (locked) return;
-                const rest = chunk.filter(w => !picked.has(w.w.toLowerCase()));
-                setPicks([...picks, ...mpShuffle(rest, Math.random).slice(0, wordCount - picks.length)]);
-            };
-            return (
-                <div className="space-y-2">
-                    <div className="flex gap-2 flex-wrap items-center">
-                        <span className="text-[11px] font-bold text-slate-400 mr-auto">Tap a word to pick it · ▾ to see full detail</span>
-                        <button onClick={randomFill} disabled={locked || picks.length >= wordCount} className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold hover:bg-amber-200 disabled:opacity-40">🎲 Fill randomly</button>
-                        <button onClick={() => setPicks([])} disabled={locked || !picks.length} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 disabled:opacity-40">Clear</button>
-                    </div>
-                    <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
-                        {chunk.map((w, i) => {
-                            const on = picked.has(w.w.toLowerCase());
-                            const isOpen = openWord === w.w;
-                            const syn = Object.values(w.s || {}).filter(Boolean);
-                            const ant = Object.values(w.a || {}).filter(Boolean);
-                            return (
-                                <div key={i} className={on ? 'bg-indigo-50' : ''}>
-                                    <div className={`w-full flex items-center gap-2 px-3 py-2 text-xs ${!on ? 'hover:bg-slate-50' : ''}`}>
-                                        <button type="button" onClick={() => toggle(w)} disabled={locked || (!on && picks.length >= wordCount)} className="flex items-center gap-2 flex-1 min-w-0 text-left disabled:opacity-50">
-                                            <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] font-black shrink-0 ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'}`}>{on ? '✓' : ''}</span>
-                                            <span className="font-extrabold text-slate-800 shrink-0">{w.w}</span>
-                                            <span className="text-slate-400 truncate">{w.m || ''}</span>
-                                        </button>
-                                        <button type="button" onClick={() => setOpenWord(isOpen ? null : w.w)} className="shrink-0 text-slate-400 hover:text-indigo-600 text-[11px] font-bold px-1.5 py-0.5" title="Show full detail">
-                                            {isOpen ? '▲' : '▾'}
-                                        </button>
-                                    </div>
-                                    {isOpen && (
-                                        <div className="px-3 pb-2.5 -mt-0.5 text-[11px] space-y-1">
-                                            {w.b && <div className="font-semibold text-indigo-700">{w.b}</div>}
-                                            {w.m && <div className="text-slate-600">{w.m}</div>}
-                                            {w.e && <div className="italic text-slate-400">“{w.e}”</div>}
-                                            {syn.length > 0 && <div className="text-emerald-700"><b>Synonyms:</b> {syn.join(', ')}</div>}
-                                            {ant.length > 0 && <div className="text-rose-600"><b>Antonyms:</b> {ant.join(', ')}</div>}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            );
+            const words = useMemo(() => chunk.map(mpNormalizeChunkWord), [chunk]);
+            return <MpWordMasterDetail words={words} pickable wordCount={wordCount} picks={picks} setPicks={setPicks} locked={locked} emptyHint="No words in this chunk." />;
         }
 
         // ---------- Study phase: everyone reads the chunk (and picks words) before the game starts ----------
-        function MpStudy({ room, isHost, serverNow, canPick, myPicks, setMyPicks, iAmLocked, lockedWords, onAutoLock, onLock, onUnlock, onStartGame, onSkip, onLeave }) {
+        function MpStudy({ room, isHost, serverNow, uid, canPick, myPicks, setMyPicks, iAmLocked, lockedWords, onAutoLock, onLock, onUnlock, onStartGame, onSkip, onLeave, triggerToast }) {
             const meta = room.meta;
             const chunk = useMemo(() => Object.values(room.chunk || {}), [JSON.stringify(room.chunk || {})]);
             const [now, setNow] = useState(serverNow());
-            const [open, setOpen] = useState(null);
-            const [q, setQ] = useState('');
             const firedLock = useRef(false);
             const firedStart = useRef(false);
+            const firedSkip = useRef(false);
             useEffect(() => { const t = setInterval(() => setNow(serverNow()), 250); return () => clearInterval(t); }, []);
             const endAt = meta.studyEndAt || now;
             const remaining = Math.max(0, endAt - now);
             const total = Math.max(1000, (meta.studySec || 60) * 1000);
             const online = Object.values(room.players || {}).filter(p => p.online !== false);
             const hostLocked = Object.values((room.words && room.words[meta.hostUid]) || {}).length === meta.wordCount;
+            const readyCount = meta.mode === 'same' ? (hostLocked ? online.length : online.filter(p => p.ready).length) : online.filter(p => p.ready).length;
             const allReady = online.length > 0 && (meta.mode === 'same' ? hostLocked : online.every(p => p.ready));
             const over = remaining <= 0;
 
@@ -3573,13 +3587,41 @@
                 firedLock.current = true;
                 if (canPick && !iAmLocked) onAutoLock(myPicks, chunk);
             }, [over]);
+            // As soon as EVERYONE is ready, skip the rest of the study timer instead of
+            // making the room sit out the full clock — same effect as the host's manual
+            // "Skip the rest" button, just triggered automatically. Only the host fires
+            // it (one write, not a write-per-player race); the existing "move everyone
+            // on" effect below then fires naturally once `over` flips true from this.
+            useEffect(() => {
+                if (!isHost || firedSkip.current || over) return;
+                if (allReady) { firedSkip.current = true; onSkip(); }
+            }, [allReady, over]);
             // host moves everyone on once everybody is locked (or after a short grace period)
             useEffect(() => {
                 if (!isHost || firedStart.current || !over) return;
                 if (allReady || now > endAt + 4500) { firedStart.current = true; onStartGame(); }
             }, [now, allReady, over]);
+            // Let a "X is ready (2/4)" toast through to everyone else the moment a
+            // player locks in — not just at the very end. Skips the toast for anyone
+            // who was already ready the first time this room's player list is seen
+            // (e.g. "same" mode, where everyone starts ready), and never toasts about
+            // yourself.
+            const prevReadyRef = useRef(null);
+            useEffect(() => {
+                const cur = {};
+                online.forEach(p => { cur[p.id] = !!p.ready; });
+                // first run: just remember the starting state, don't toast about it
+                if (prevReadyRef.current === null) { prevReadyRef.current = cur; return; }
+                const prev = prevReadyRef.current;
+                online.forEach(p => {
+                    if (p.id !== uid && p.ready && !prev[p.id]) {
+                        triggerToast && triggerToast(`✅ ${p.name || 'A player'} is ready (${readyCount}/${online.length})`);
+                    }
+                });
+                prevReadyRef.current = cur;
+            }, [online.map(p => `${p.id}:${p.ready}`).join(',')]);
 
-            const shown = chunk.filter(w => !q.trim() || w.w.toLowerCase().includes(q.trim().toLowerCase()));
+            const chunkWords = useMemo(() => chunk.map(mpNormalizeChunkWord), [chunk]);
             const urgent = remaining < 10000;
             return (
                 <div className="space-y-4">
@@ -3598,64 +3640,32 @@
                         <div className="h-2 rounded-full bg-white/20 mt-3 overflow-hidden"><div className="h-full bg-white transition-all duration-300" style={{ width: `${Math.max(0, Math.min(100, (remaining / total) * 100))}%` }} /></div>
                         {over && <div className="text-xs font-bold mt-2 text-sky-100">Time's up — getting the game ready…</div>}
                     </div>
-                    <div className={`grid gap-4 ${canPick ? 'lg:grid-cols-[1.2fr_1fr]' : ''}`}>
-                        <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2">
-                            <div className="flex items-center gap-2">
-                                <h3 className="text-sm font-black text-slate-800 mr-auto">The chunk ({chunk.length} words)</h3>
-                                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs w-32" />
+                    {canPick ? (
+                        <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+                            <div className="flex items-center justify-between gap-2">
+                                <h3 className="text-sm font-black text-slate-800">{meta.mode === 'swap' ? 'Your picks' : 'Pick the words'} ({chunk.length} words in chunk)</h3>
+                                <span className={`text-xs font-black px-2.5 py-1 rounded-full ${(iAmLocked ? lockedWords.length : myPicks.length) === meta.wordCount ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{iAmLocked ? lockedWords.length : myPicks.length} / {meta.wordCount}</span>
                             </div>
-                            <div className="max-h-[28rem] overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
-                                {shown.map((w, i) => {
-                                    const isOpen = open === w.w;
-                                    const syn = Object.values(w.s || {}).filter(Boolean);
-                                    const ant = Object.values(w.a || {}).filter(Boolean);
-                                    return (
-                                        <div key={i}>
-                                            <div className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-slate-50">
-                                                <button type="button" onClick={() => setOpen(isOpen ? null : w.w)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
-                                                    <span className="font-extrabold text-slate-800 shrink-0">{w.w}</span>
-                                                    <span className="text-slate-400 truncate">{w.m}</span>
-                                                </button>
-                                                <button type="button" onClick={() => setOpen(isOpen ? null : w.w)} className="shrink-0 text-slate-400 hover:text-indigo-600 text-[11px] font-bold px-1.5 py-0.5" title="Show full detail">
-                                                    {isOpen ? '▲' : '▾'}
-                                                </button>
-                                            </div>
-                                            {isOpen && (
-                                                <div className="px-3 pb-2.5 -mt-0.5 text-[11px] space-y-1">
-                                                    {w.b && <div className="font-semibold text-indigo-700">{w.b}</div>}
-                                                    {w.m && <div className="text-slate-600">{w.m}</div>}
-                                                    {w.e && <div className="italic text-slate-400">“{w.e}”</div>}
-                                                    {syn.length > 0 && <div className="text-emerald-700"><b>Synonyms:</b> {syn.join(', ')}</div>}
-                                                    {ant.length > 0 && <div className="text-rose-600"><b>Antonyms:</b> {ant.join(', ')}</div>}
-                                                </div>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                        {canPick && (
-                            <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3 h-fit">
-                                <div className="flex items-center justify-between gap-2">
-                                    <h3 className="text-sm font-black text-slate-800">{meta.mode === 'swap' ? 'Your picks' : 'Pick the words'}</h3>
-                                    <span className={`text-xs font-black px-2.5 py-1 rounded-full ${(iAmLocked ? lockedWords.length : myPicks.length) === meta.wordCount ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{iAmLocked ? lockedWords.length : myPicks.length} / {meta.wordCount}</span>
+                            {iAmLocked ? (
+                                <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-center">
+                                    <div className="text-2xl">✅</div>
+                                    <div className="text-sm font-black text-emerald-800 mt-1">Locked in</div>
+                                    <div className="text-[11px] text-emerald-700/80 mt-0.5 line-clamp-2">{lockedWords.map(w => w.w).join(' · ')}</div>
+                                    {!over && <button onClick={onUnlock} className="mt-3 px-4 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-700 text-xs font-bold hover:bg-emerald-100">Edit my words</button>}
                                 </div>
-                                {iAmLocked ? (
-                                    <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-center">
-                                        <div className="text-2xl">✅</div>
-                                        <div className="text-sm font-black text-emerald-800 mt-1">Locked in</div>
-                                        <div className="text-[11px] text-emerald-700/80 mt-0.5 line-clamp-2">{lockedWords.map(w => w.w).join(' · ')}</div>
-                                        {!over && <button onClick={onUnlock} className="mt-3 px-4 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-700 text-xs font-bold hover:bg-emerald-100">Edit my words</button>}
-                                    </div>
-                                ) : (
-                                    <>
-                                        <MpChunkPicker chunk={chunk} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={over} />
-                                        <button onClick={onLock} disabled={myPicks.length !== meta.wordCount || over} className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-40">🔒 Lock in {meta.wordCount} words</button>
-                                    </>
-                                )}
-                            </div>
-                        )}
-                    </div>
+                            ) : (
+                                <>
+                                    <MpChunkPicker chunk={chunk} wordCount={meta.wordCount} picks={myPicks} setPicks={setMyPicks} locked={over} />
+                                    <button onClick={onLock} disabled={myPicks.length !== meta.wordCount || over} className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-40">🔒 Lock in {meta.wordCount} words</button>
+                                </>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2">
+                            <h3 className="text-sm font-black text-slate-800">The chunk ({chunk.length} words)</h3>
+                            <MpWordMasterDetail words={chunkWords} pickable={false} emptyHint="No words in this chunk." />
+                        </div>
+                    )}
                     <div className="flex gap-2 justify-end">
                         <button onClick={onLeave} className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 font-bold text-sm hover:bg-slate-100">{isHost ? 'Close room' : 'Leave room'}</button>
                     </div>
@@ -4677,12 +4687,13 @@
                 return shell(<>{header}
                     <MpStudy
                         key={`study-${roomCode}-${meta.round}`}
-                        room={room} isHost={isHost} serverNow={serverNow}
+                        room={room} isHost={isHost} serverNow={serverNow} uid={uid}
                         canPick={meta.mode === 'swap' || isHost}
                         myPicks={myPicks} setMyPicks={setMyPicks}
                         iAmLocked={iAmLocked} lockedWords={lockedWords}
                         onAutoLock={autoLockWords} onLock={lockWords} onUnlock={unlockWords}
                         onStartGame={startGame} onSkip={skipStudy} onLeave={leaveRoom}
+                        triggerToast={triggerToast}
                     />
                 </>);
             }
@@ -8525,7 +8536,7 @@ Rules:
                                 interactive UI for that item already lives; dismissing a poke or
                                 declining an invite happens right here. */}
                             {cloudUser && (
-                                <div className="relative shrink-0">
+                                <div className="relative shrink-0" onMouseEnter={() => setShowNotifPanel(true)} onMouseLeave={() => setShowNotifPanel(false)}>
                                     <button
                                         type="button"
                                         onClick={() => setShowNotifPanel(p => !p)}
@@ -8601,7 +8612,7 @@ Rules:
                                 (the only place MpChat itself lives), switching to the Multiplayer
                                 tab to get there. */}
                             {cloudUser && (
-                                <div className="relative shrink-0">
+                                <div className="relative shrink-0" onMouseEnter={() => setShowMsgPanel(true)} onMouseLeave={() => setShowMsgPanel(false)}>
                                     <button
                                         type="button"
                                         onClick={() => setShowMsgPanel(p => !p)}
