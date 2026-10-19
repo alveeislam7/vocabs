@@ -3670,7 +3670,7 @@
         // (Firebase's free plan has no server-side expiry, so every client
         // that opens a chat prunes the old ones).
         // ------------------------------------------------------------
-        function MpChat({ uid, other, onClose }) {
+        function MpChat({ uid, myName, myPhoto, other, onClose }) {
             const F = window.FB;
             const pairKey = [uid, other.id].sort().join('_');
             const path = `chats/${pairKey}`;
@@ -3692,11 +3692,35 @@
                 return () => u();
             }, [path]);
             useEffect(() => { if (bottomRef.current) bottomRef.current.scrollIntoView({ block: 'end' }); }, [msgs.length]);
+            // Opening this chat marks it read right away (for the 💬 header badge),
+            // and re-marks it read whenever a new message arrives while it's still
+            // open, so a reply mid-conversation never leaves a stale "unread" badge.
+            useEffect(() => {
+                if (!F || !F.rtdb || !uid || !other.id) return;
+                F.dbSet(F.dbRef(F.rtdb, `notifSeen/${uid}/chats/${other.id}`), Date.now()).catch(() => {});
+            }, [uid, other.id, msgs.length]);
             const send = async () => {
                 const t = text.trim().slice(0, 200);
                 if (!t) return;
                 setText('');
-                try { await F.dbSet(F.dbRef(F.rtdb, `${path}/${Date.now()}_${String(uid).slice(0, 6)}`), { from: uid, text: t, at: Date.now() }); }
+                const at = Date.now();
+                try {
+                    await F.dbSet(F.dbRef(F.rtdb, `${path}/${at}_${String(uid).slice(0, 6)}`), { from: uid, text: t, at });
+                    // Update BOTH sides' conversation roster so the 💬 badge/list stays
+                    // live for the other person even if they've never opened this chat
+                    // before — same mailbox-style write pattern as pokes/invites.
+                    // Each mailbox entry describes the OTHER party, from that mailbox's
+                    // owner's point of view — so my own entry (chatIndex/uid/other.id)
+                    // describes `other`, and `other`'s entry about me describes myself.
+                    const entryAboutOther = { name: (other.name || 'Player'), lastAt: at, lastFrom: uid };
+                    const entryAboutMe = { name: myName || 'Player', lastAt: at, lastFrom: uid };
+                    if (other.photo) entryAboutOther.photo = other.photo;
+                    if (myPhoto) entryAboutMe.photo = myPhoto;
+                    await F.dbSet(F.dbRef(F.rtdb, `chatIndex/${uid}/${other.id}`), entryAboutOther).catch(() => {});
+                    await F.dbSet(F.dbRef(F.rtdb, `chatIndex/${other.id}/${uid}`), entryAboutMe).catch(() => {});
+                    // I just sent it, so my own copy of this chat is already "seen".
+                    F.dbSet(F.dbRef(F.rtdb, `notifSeen/${uid}/chats/${other.id}`), at).catch(() => {});
+                }
                 catch (e) { console.error(e); }
             };
             const clearAll = () => { msgs.forEach(m => F.dbRemove(F.dbRef(F.rtdb, `${path}/${m.id}`)).catch(() => {})); };
@@ -4065,7 +4089,7 @@
             );
         }
 
-        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast, chunkSize = 25 }) {
+        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast, chunkSize = 25, openChatWith, onOpenedChat }) {
             const [fbReady, setFbReady] = useState(!!window.FB);
             const [conn, setConn] = useState(false);
             const [connWaited, setConnWaited] = useState(false);
@@ -4095,6 +4119,12 @@
 
             const uid = cloudUser ? cloudUser.uid : null;
             const myName = ((nickname || '').trim() || (cloudUser && cloudUser.displayName) || 'Player').slice(0, 24);
+            // The header's 💬 panel sets this (via App) when you tap a conversation
+            // from anywhere in the app — open it here, then tell App to clear it so
+            // re-tapping the same person later still works.
+            useEffect(() => {
+                if (openChatWith) { setChatWith(openChatWith); onOpenedChat && onOpenedChat(); }
+            }, [openChatWith]);
             const myPhoto = (cloudUser && cloudUser.photoURL && cloudUser.photoURL.length <= 480) ? cloudUser.photoURL : '';
             const FB = window.FB;
             const rtdb = FB && FB.rtdb;
@@ -4419,7 +4449,7 @@
             };
 
             // ---------------- gates ----------------
-            const shell = (children) => <div className="space-y-5 tab-panel-enter">{children}{chatWith && uid && <MpChat uid={uid} other={chatWith} onClose={() => setChatWith(null)} />}</div>;
+            const shell = (children) => <div className="space-y-5 tab-panel-enter">{children}{chatWith && uid && <MpChat uid={uid} myName={myName} myPhoto={cloudUser && cloudUser.photoURL} other={chatWith} onClose={() => setChatWith(null)} />}</div>;
             const header = (
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                     <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">🌐 Multiplayer Arena</h2>
@@ -5979,6 +6009,45 @@ Rules:
                 return n;
             }, [notifChallengeMap, cloudUser]);
             const notifTotalCount = Object.keys(notifInvites).length + Object.keys(notifPokes).length + notifActionableChallengeCount;
+
+            // GLOBAL MESSAGES (💬 icon in the header) — a roster of everyone you've
+            // chatted with, kept at chatIndex/$uid/$otherUid (written by EITHER side
+            // whenever a message is sent, so your own index updates the moment
+            // someone messages you, even if you've never opened that chat before).
+            // Unread = their last message is newer than the last time you opened
+            // that specific chat (notifSeen/$uid/chats/$otherUid), and it wasn't you
+            // who sent it last.
+            const [chatIndex, setChatIndex] = useState({});
+            const [chatSeenMap, setChatSeenMap] = useState({});
+            useEffect(() => {
+                if (!notifFbReady || !window.FB || !window.FB.rtdb || !cloudUser) {
+                    setChatIndex({}); setChatSeenMap({});
+                    return;
+                }
+                const F = window.FB;
+                const uid = cloudUser.uid;
+                const u1 = F.dbOnValue(F.dbRef(F.rtdb, `chatIndex/${uid}`), (snap) => setChatIndex(snap.val() || {}), () => {});
+                const u2 = F.dbOnValue(F.dbRef(F.rtdb, `notifSeen/${uid}/chats`), (snap) => setChatSeenMap(snap.val() || {}), () => {});
+                return () => { u1(); u2(); };
+            }, [notifFbReady, cloudUser && cloudUser.uid]);
+            const chatConversations = useMemo(() => {
+                if (!cloudUser) return [];
+                return Object.entries(chatIndex)
+                    .map(([otherUid, c]) => ({
+                        id: otherUid,
+                        name: (c && c.name) || 'Someone',
+                        photo: c && c.photo,
+                        lastAt: (c && c.lastAt) || 0,
+                        unread: !!(c && c.lastFrom && c.lastFrom !== cloudUser.uid && (c.lastAt || 0) > (chatSeenMap[otherUid] || 0)),
+                    }))
+                    .sort((a, b) => b.lastAt - a.lastAt);
+            }, [chatIndex, chatSeenMap, cloudUser]);
+            const unreadChatCount = chatConversations.filter(c => c.unread).length;
+            const [showMsgPanel, setShowMsgPanel] = useState(false);
+            // Set by the 💬 panel when you tap a conversation; MultiplayerArena
+            // picks this up (it's the only place that actually renders MpChat)
+            // and opens that chat, then clears it via onOpenedChat.
+            const [pendingChatWith, setPendingChatWith] = useState(null);
 
             // What to actually display as "the user's name" anywhere in the app.
             const displayName = nickname.trim() || cloudUser?.displayName || (cloudUser?.email ? cloudUser.email.split('@')[0] : 'Guest');
@@ -8527,6 +8596,66 @@ Rules:
                                 </div>
                             )}
 
+                            {/* MESSAGES — everyone you've ever chatted with, newest first, with
+                                an unread dot. Tapping a conversation opens it via MultiplayerArena
+                                (the only place MpChat itself lives), switching to the Multiplayer
+                                tab to get there. */}
+                            {cloudUser && (
+                                <div className="relative shrink-0">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowMsgPanel(p => !p)}
+                                        className="relative w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 flex items-center justify-center text-base transition-colors"
+                                        title="Messages"
+                                    >
+                                        💬
+                                        {unreadChatCount > 0 && (
+                                            <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-black flex items-center justify-center">
+                                                {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                                            </span>
+                                        )}
+                                    </button>
+                                    {showMsgPanel && (
+                                        <React.Fragment>
+                                            <div className="fixed inset-0 z-40" onClick={() => setShowMsgPanel(false)} />
+                                            <div className="absolute right-0 top-11 z-50 w-80 max-w-[90vw] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+                                                <div className="px-4 py-3 border-b border-slate-100">
+                                                    <span className="text-sm font-black text-slate-800">Messages</span>
+                                                </div>
+                                                <div className="max-h-96 overflow-y-auto divide-y divide-slate-100">
+                                                    {chatConversations.map((c) => (
+                                                        <button
+                                                            key={c.id}
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setPendingChatWith({ id: c.id, name: c.name, photo: c.photo });
+                                                                setActiveTab('multi');
+                                                                setShowMsgPanel(false);
+                                                            }}
+                                                            className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-slate-50"
+                                                        >
+                                                            {c.photo ? (
+                                                                <img src={c.photo} alt="" className="w-8 h-8 rounded-full shrink-0" referrerPolicy="no-referrer" />
+                                                            ) : (
+                                                                <span className="w-8 h-8 rounded-full bg-sky-100 text-sky-700 flex items-center justify-center text-xs font-bold shrink-0">{(c.name || '?')[0].toUpperCase()}</span>
+                                                            )}
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className={`text-xs truncate ${c.unread ? 'font-black text-slate-800' : 'font-bold text-slate-600'}`}>{c.name}</div>
+                                                                <div className="text-[10px] text-slate-400">{c.unread ? 'New message' : 'Tap to chat'}</div>
+                                                            </div>
+                                                            {c.unread && <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />}
+                                                        </button>
+                                                    ))}
+                                                    {chatConversations.length === 0 && (
+                                                        <div className="px-4 py-6 text-center text-xs text-slate-400">No conversations yet — message someone from the Multiplayer tab.</div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </React.Fragment>
+                                    )}
+                                </div>
+                            )}
+
                             {/* ACCOUNT / CLOUD SYNC — sign in with Google to back your data up
                                 and carry it to any other device; everything keeps working
                                 locally exactly as before while signed out. */}
@@ -9722,6 +9851,8 @@ Rules:
                                 activeBookId={activeBook.id}
                                 triggerToast={triggerToast}
                                 chunkSize={chunkSize}
+                                openChatWith={pendingChatWith}
+                                onOpenedChat={() => setPendingChatWith(null)}
                             />
                         </div>
                     )}
