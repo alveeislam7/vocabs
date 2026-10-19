@@ -3447,6 +3447,22 @@
         // Word-list-style master/detail used everywhere multiplayer picks or studies:
         // LEFT = family list (main + nested syn/ant) with the pick checkbox on the RIGHT
         // of each row; RIGHT = detail card + gallery swipe to memorize / prepare.
+        // Filled in by MultiplayerArena on every render, so the picker/study screens can draw the
+        // SAME word card the Home (Word List) screen uses — with the user's own display settings.
+        const MP_VIEW_CTX = { fieldVisibility: null, showBangla: true, accent: 'us', notify: null, localIndex: new Map() };
+        // Slim (room/chunk) word row -> the item shape WordCardShell expects.
+        function mpSlimItemFromRow(r) {
+            const asEntries = (list) => (list || []).map((x) => (typeof x === 'string' ? { word: x } : x)).filter((x) => x && x.word);
+            return {
+                id: r.key,
+                word: r.w,
+                meaning_en: r.m || '',
+                meaning_bn: r.b || '',
+                example_main: r.e || '',
+                synonyms: asEntries(r.synRaw && r.synRaw.length ? r.synRaw : r.syn),
+                antonyms: asEntries(r.antRaw && r.antRaw.length ? r.antRaw : r.ant),
+            };
+        }
         function MpWordMasterDetail({ words, pickable = false, wordCount = 0, picks, setPicks, locked, emptyHint = 'No words here.' }) {
             const [q, setQ] = useState('');
             const [selectedKey, setSelectedKey] = useState(null);
@@ -3507,44 +3523,30 @@
             const selected = selIdx >= 0 ? filteredFlat[selIdx] : (filteredFlat[0] || null);
             const prevRow = selIdx > 0 ? filteredFlat[selIdx - 1] : null;
             const nextRow = selIdx >= 0 && selIdx < filteredFlat.length - 1 ? filteredFlat[selIdx + 1] : null;
+            // The right-hand detail is the very same card the Home (Word List) screen shows:
+            // pinned "Family" header, the main word card, then every synonym and antonym card.
+            // Picking happens from the header button (or the tick boxes in the list).
             const detailCard = (row) => {
                 if (!row) return <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-xs text-slate-400">Select a word to preview it here.</div>;
-                const isKid = row.role === 'syn' || row.role === 'ant';
-                const parent = isKid ? flatRows.find((r) => r.key === row.parentKey) : null;
+                const mainRow = (row.role === 'syn' || row.role === 'ant') ? (flatRows.find((r) => r.key === row.parentKey) || row) : row;
+                const item = mainRow.full || mpSlimItemFromRow(mainRow);
+                const isOn = pickable && picked.has(String(row.w || '').toLowerCase());
+                const pickBtn = pickable ? (
+                    <button type="button" onClick={() => toggle(row)} disabled={locked || (!isOn && picks.length >= wordCount)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-black border disabled:opacity-40 ${isOn ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>
+                        {isOn ? `✓ Picked “${row.w}”` : `Pick “${row.w}”`}
+                    </button>
+                ) : null;
                 return (
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2.5 shadow-sm">
-                        <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                                {isKid && (
-                                    <div className={`text-[10px] font-bold uppercase tracking-wider mb-0.5 ${row.role === 'syn' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                        {row.role === 'syn' ? 'Synonym' : 'Antonym'}{parent ? ` · of ${parent.w}` : ''}
-                                    </div>
-                                )}
-                                <div className="text-lg font-black text-slate-800">{row.w}</div>
-                            </div>
-                            {pickable && (
-                                <button type="button" onClick={() => toggle(row)} disabled={locked || (!picked.has(String(row.w).toLowerCase()) && picks.length >= wordCount)}
-                                    className={`shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-black border ${picked.has(String(row.w).toLowerCase()) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>
-                                    {picked.has(String(row.w).toLowerCase()) ? '✓ Picked' : 'Pick'}
-                                </button>
-                            )}
-                        </div>
-                        {row.b && <div className="text-sm font-semibold text-indigo-700">{row.b}</div>}
-                        {row.m && <div className="text-sm text-slate-600">{row.m}</div>}
-                        {row.e && <div className="text-sm italic text-slate-400">“{row.e}”</div>}
-                        {!isKid && (row.syn || []).length > 0 && (
-                            <div>
-                                <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Synonyms</span>
-                                <div className="text-sm text-emerald-700 mt-0.5">{(row.syn || []).join(', ')}</div>
-                            </div>
-                        )}
-                        {!isKid && (row.ant || []).length > 0 && (
-                            <div>
-                                <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">Antonyms</span>
-                                <div className="text-sm text-rose-600 mt-0.5">{(row.ant || []).join(', ')}</div>
-                            </div>
-                        )}
-                    </div>
+                    <WordCardShell
+                        item={item}
+                        detailMode
+                        accent={MP_VIEW_CTX.accent}
+                        notify={MP_VIEW_CTX.notify}
+                        showBangla={MP_VIEW_CTX.showBangla}
+                        fieldVisibility={MP_VIEW_CTX.fieldVisibility || DEFAULT_FIELD_VISIBILITY}
+                        editDeleteActions={pickBtn}
+                    />
                 );
             };
             const rowBtn = (row, nested) => {
@@ -3579,7 +3581,7 @@
                     </div>
                     <div className="flex flex-col lg:flex-row gap-3 items-stretch">
                         {/* LEFT — same idea as Word List: compact family list */}
-                        <div className="w-full lg:w-[42%] shrink-0 max-h-[28rem] overflow-hidden rounded-2xl border border-slate-200 bg-white flex flex-col">
+                        <div className="w-full lg:w-[34%] shrink-0 max-h-[40rem] overflow-hidden rounded-2xl border border-slate-200 bg-white flex flex-col">
                             <div className="shrink-0 h-10 flex items-center justify-between px-3 border-b border-slate-100">
                                 <span className="text-[11px] font-bold text-indigo-600 uppercase tracking-wider">Word</span>
                                 {pickable && <span className="text-[10px] font-bold text-slate-400">tap ✓ to pick</span>}
@@ -3634,6 +3636,7 @@
                 ant: relatedNames(antRaw),
                 synRaw,
                 antRaw,
+                full: w,
             };
         }
 
@@ -3694,6 +3697,9 @@
                 ant,
                 synRaw: syn,
                 antRaw: ant,
+                // If this word also exists in the player's own books, use that FULL entry (so synonyms/antonyms
+                // show every detail, exactly like the Home screen). Otherwise we fall back to what the room shared.
+                full: MP_VIEW_CTX.localIndex.get(String(w.w || '').toLowerCase()) || null,
             };
         }
 
@@ -4230,7 +4236,21 @@
             );
         }
 
-        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast, chunkSize = 25, openChatWith, onOpenedChat }) {
+        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast, chunkSize = 25, openChatWith, onOpenedChat, fieldVisibility = null, showBangla = true, accent = 'us' }) {
+            // Every word the player owns, by lower-case spelling — lets room/chunk words (which are shared in a slim
+            // form) be shown with their full details when the player has the same word in their own books.
+            const mpLocalIndex = useMemo(() => {
+                const m = new Map();
+                Object.values(allWords || {}).forEach((list) => (list || []).forEach((w) => {
+                    if (w && w.word) { const k = String(w.word).toLowerCase(); if (!m.has(k)) m.set(k, w); }
+                }));
+                return m;
+            }, [allWords]);
+            MP_VIEW_CTX.localIndex = mpLocalIndex;
+            MP_VIEW_CTX.fieldVisibility = fieldVisibility;
+            MP_VIEW_CTX.showBangla = showBangla;
+            MP_VIEW_CTX.accent = accent;
+            MP_VIEW_CTX.notify = triggerToast;
             const [fbReady, setFbReady] = useState(!!window.FB);
             const [conn, setConn] = useState(false);
             const [connWaited, setConnWaited] = useState(false);
@@ -4849,8 +4869,8 @@
                     </div>
                 </div>
                 {!hostOnline && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 font-semibold">The host went offline. If they don't come back, leave and create a new room.</div>}
-                <div className="grid lg:grid-cols-[1fr_1.3fr] gap-4">
-                    <div className="bg-white border border-slate-200 rounded-2xl p-4 h-fit">
+                <div className="grid lg:grid-cols-[minmax(0,1fr)_17rem] gap-4 items-start">
+                    <div className="order-2 bg-white border border-slate-200 rounded-2xl p-3 h-fit">
                         <div className="flex items-center justify-between mb-2">
                             <h3 className="text-sm font-black text-slate-800">Players</h3>
                             <span className="text-[11px] font-bold text-slate-400">{playerList.length}/{meta.maxPlayers || MP_MAX_PLAYERS}</span>
@@ -4882,12 +4902,16 @@
                                     <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search players…" className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs" />
                                     <div className="max-h-56 overflow-y-auto space-y-1">
                                         {invitable.map(u => (
-                                            <div key={u.id} className="flex items-center gap-2 rounded-xl bg-slate-50 px-2 py-1.5">
-                                                <div className="relative"><MpAvatar name={u.name} photo={u.photo} size={28} /><span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${u.online ? 'bg-emerald-500' : 'bg-slate-300'}`} /></div>
-                                                <div className="flex-1 min-w-0 text-xs font-extrabold text-slate-800 truncate">{u.name}</div>
-                                                <button onClick={() => sendInvite(u)} className="px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-700 text-[11px] font-bold hover:bg-indigo-200">✉ Invite</button>
-                                                <button onClick={() => sendPoke(u)} className="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 text-[11px] font-bold hover:bg-amber-200" title="Nudge to study">👋</button>
-                                                <button onClick={() => setChatWith({ id: u.id, name: u.name, photo: u.photo })} className="px-2 py-1 rounded-lg bg-sky-100 text-sky-700 text-[11px] font-bold hover:bg-sky-200" title="Message">💬</button>
+                                            <div key={u.id} className="rounded-xl bg-slate-50 px-2 py-1.5 space-y-1">
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <div className="relative shrink-0"><MpAvatar name={u.name} photo={u.photo} size={24} /><span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${u.online ? 'bg-emerald-500' : 'bg-slate-300'}`} /></div>
+                                                    <div className="flex-1 min-w-0 text-xs font-extrabold text-slate-800 truncate">{u.name}</div>
+                                                </div>
+                                                <div className="flex gap-1">
+                                                    <button onClick={() => sendInvite(u)} className="flex-1 px-2 py-1 rounded-lg bg-indigo-100 text-indigo-700 text-[11px] font-bold hover:bg-indigo-200">✉ Invite</button>
+                                                    <button onClick={() => sendPoke(u)} className="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 text-[11px] font-bold hover:bg-amber-200" title="Nudge to study">👋</button>
+                                                    <button onClick={() => setChatWith({ id: u.id, name: u.name, photo: u.photo })} className="px-2 py-1 rounded-lg bg-sky-100 text-sky-700 text-[11px] font-bold hover:bg-sky-200" title="Message">💬</button>
+                                                </div>
                                             </div>
                                         ))}
                                         {invitable.length === 0 && <div className="py-4 text-center text-[11px] text-slate-400">Nobody else is on the public list yet. Ask friends to open Multiplayer → Players → "Make me visible", or share the room code.</div>}
@@ -4896,7 +4920,7 @@
                             );
                         })()}
                     </div>
-                    <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+                    <div className="order-1 min-w-0 bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
                         {studyFirst ? (
                             <div className="text-center py-8 space-y-2">
                                 <div className="text-4xl">📖</div>
@@ -10222,6 +10246,9 @@ Rules:
                                 activeBookId={activeBook.id}
                                 triggerToast={triggerToast}
                                 chunkSize={chunkSize}
+                                fieldVisibility={fieldVisibility}
+                                showBangla={showBangla}
+                                accent={speechAccent}
                                 openChatWith={pendingChatWith}
                                 onOpenedChat={() => setPendingChatWith(null)}
                             />
