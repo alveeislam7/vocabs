@@ -4810,6 +4810,108 @@
             </>);
         }
 
+        // SWIPE DECK — phone-gallery style paging for the Word List detail card.
+        // Renders the previous, current and next cards side by side inside a 3x-wide
+        // track, so both neighbours are already loaded and slide into view with the
+        // finger (touch/pen drag) or with the ‹ › buttons. After the slide finishes,
+        // the parent commits the new selection and the track snaps back to centre
+        // with no animation, so the swap is invisible. Desktop mouse users use the
+        // buttons (mouse dragging is left alone so text selection still works).
+        function SwipeDeck({ prev, cur, next, onPrev, onNext, label }) {
+            const wrapRef = useRef(null);
+            const trackRef = useRef(null);
+            const g = useRef({ down: false, axis: null, x0: 0, y0: 0, t0: 0, dx: 0, busy: false });
+            const hasPrev = !!prev, hasNext = !!next;
+
+            const setX = (dx, animate) => {
+                const t = trackRef.current;
+                if (!t) return;
+                t.style.transition = animate ? 'transform 300ms cubic-bezier(0.22, 0.8, 0.3, 1)' : 'none';
+                t.style.transform = `translateX(calc(-33.3333% + ${dx}px))`;
+            };
+
+            const slideTo = (dir) => {
+                const s = g.current;
+                const w = wrapRef.current ? wrapRef.current.offsetWidth : 0;
+                if (s.busy || !w) return;
+                if ((dir > 0 && !hasNext) || (dir < 0 && !hasPrev)) { setX(0, true); return; }
+                s.busy = true;
+                setX(-dir * w, true);
+                setTimeout(() => {
+                    ReactDOM.flushSync(() => { dir > 0 ? onNext() : onPrev(); });
+                    setX(0, false);
+                    s.busy = false;
+                }, 300);
+            };
+
+            const onPointerDown = (e) => {
+                if (e.pointerType === 'mouse' || g.current.busy) return;
+                const s = g.current;
+                s.down = true; s.axis = null; s.x0 = e.clientX; s.y0 = e.clientY; s.t0 = Date.now(); s.dx = 0;
+            };
+            const onPointerMove = (e) => {
+                const s = g.current;
+                if (!s.down) return;
+                const dx = e.clientX - s.x0, dy = e.clientY - s.y0;
+                if (!s.axis) {
+                    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+                    s.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+                    if (s.axis === 'x') { try { wrapRef.current.setPointerCapture(e.pointerId); } catch (_) {} }
+                }
+                if (s.axis !== 'x') return;
+                // rubber-band when there's nothing further in that direction
+                const blocked = (dx > 0 && !hasPrev) || (dx < 0 && !hasNext);
+                s.dx = blocked ? dx * 0.25 : dx;
+                setX(s.dx, false);
+            };
+            const endDrag = (e) => {
+                const s = g.current;
+                if (!s.down) return;
+                s.down = false;
+                if (s.axis !== 'x') return;
+                const w = wrapRef.current.offsetWidth;
+                const v = s.dx / Math.max(1, Date.now() - s.t0); // px per ms
+                if (s.dx < -w * 0.22 || v < -0.45) slideTo(1);
+                else if (s.dx > w * 0.22 || v > 0.45) slideTo(-1);
+                else setX(0, true);
+            };
+
+            const pane = (node, key) => (
+                <div key={key} className="w-1/3 shrink-0 min-w-0 px-0.5">{node}</div>
+            );
+
+            return (
+                <div>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                        <button type="button" onClick={() => slideTo(-1)} disabled={!hasPrev}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${hasPrev ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}>
+                            ‹ Prev
+                        </button>
+                        <span className="text-[11px] font-semibold text-slate-400">{label}<span className="hidden sm:inline"> · swipe or use the buttons</span><span className="sm:hidden"> · swipe ↔</span></span>
+                        <button type="button" onClick={() => slideTo(1)} disabled={!hasNext}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${hasNext ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}>
+                            Next ›
+                        </button>
+                    </div>
+                    <div
+                        ref={wrapRef}
+                        className="overflow-hidden"
+                        style={{ touchAction: 'pan-y' }}
+                        onPointerDown={onPointerDown}
+                        onPointerMove={onPointerMove}
+                        onPointerUp={endDrag}
+                        onPointerCancel={endDrag}
+                    >
+                        <div ref={trackRef} className="flex items-start" style={{ width: '300%', transform: 'translateX(-33.3333%)', willChange: 'transform' }}>
+                            {pane(prev ? prev.node : null, 'p')}
+                            {pane(cur, 'c')}
+                            {pane(next ? next.node : null, 'n')}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         function App() {
             // BOOKS LIST STATE
             const [books, setBooks] = useState(() => {
@@ -8998,7 +9100,28 @@ Rules:
                                             );
                                         }
                                         const famLevel = getFamiliarity(selectedItem.id);
-                                        return <WordCard item={selectedItem} famLevel={famLevel} detailMode />;
+                                        // Neighbours come from the FULL filtered list (not just this
+                                        // page), so swiping flows across page boundaries too.
+                                        const idx = filteredWords.findIndex(w => w.id === selectedItem.id);
+                                        const prevItem = idx > 0 ? filteredWords[idx - 1] : null;
+                                        const nextItem = idx >= 0 && idx < filteredWords.length - 1 ? filteredWords[idx + 1] : null;
+                                        const goToWord = (w) => {
+                                            if (!w) return;
+                                            setSelectedWordId(w.id);
+                                            const wi = filteredWords.findIndex(x => x.id === w.id);
+                                            if (wi >= 0) setCurrentPage(Math.floor(wi / itemsPerPage) + 1);
+                                        };
+                                        const cardFor = (w) => <WordCard item={w} famLevel={getFamiliarity(w.id)} detailMode />;
+                                        return (
+                                            <SwipeDeck
+                                                label={`${idx + 1} / ${filteredWords.length}`}
+                                                prev={prevItem ? { node: cardFor(prevItem) } : null}
+                                                next={nextItem ? { node: cardFor(nextItem) } : null}
+                                                cur={<WordCard item={selectedItem} famLevel={famLevel} detailMode />}
+                                                onPrev={() => goToWord(prevItem)}
+                                                onNext={() => goToWord(nextItem)}
+                                            />
+                                        );
                                     })()}
                                 </div>
 
