@@ -1748,6 +1748,32 @@
             const [speedTimerActive, setSpeedTimerActive] = useState(false);
             const [speedTimeLeft, setSpeedTimeLeft] = useState(60);
             const speedTimerRef = useRef(null);
+            // Per-mode settings shown on each Word Quest card (remembered between visits).
+            // questions: 0 = endless (until lives run out) · qTime: seconds per question, 0 = off
+            const QUEST_CFG_DEFAULT = {
+                classic: { questions: 10, qTime: 0 },
+                speed: { seconds: 60 },
+                match: { rounds: 0 },
+                fillin: { questions: 0, qTime: 0 },
+                truefalse: { questions: 0, qTime: 0 },
+                synant: { questions: 0, qTime: 0 },
+            };
+            const [questCfg, setQuestCfg] = useState(() => {
+                try {
+                    const v = JSON.parse(localStorage.getItem('wordsmart_quest_cfg_v1') || 'null') || {};
+                    const out = {};
+                    Object.keys(QUEST_CFG_DEFAULT).forEach(k => { out[k] = { ...QUEST_CFG_DEFAULT[k], ...(v[k] || {}) }; });
+                    return out;
+                } catch (e) { return QUEST_CFG_DEFAULT; }
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_quest_cfg_v1', JSON.stringify(questCfg)); } catch (e) {} }, [questCfg]);
+            const setCfg = (mode, patch) => setQuestCfg(prev => ({ ...prev, [mode]: { ...prev[mode], ...patch } }));
+            const speedTotalRef = useRef(60);
+            const [matchBoard, setMatchBoard] = useState(1);
+            const qTimerRef = useRef(null);
+            const qBadgeRef = useRef(null);
+            const qBarRef = useRef(null);
+            const qTimeoutRef = useRef(null);
             const speedBadgeRef = useRef(null);
             const speedBadgeImmersiveRef = useRef(null);
             const speedProgressRef = useRef(null);
@@ -1993,7 +2019,7 @@
                 setGameMode(mode);
                 setGameState('playing');
                 setScore(0); setCombo(0); setMaxCombo(0); setXpEarned(0);
-                setMissedWords([]); setQuestionsAnswered(0);
+                setMissedWords([]); setQuestionsAnswered(0); setMatchBoard(1);
                 setSelectedAnswer(null); setFeedbackType(null);
                 setRevealWord(false);
                 setNav({ list: [], idx: -1 });
@@ -2005,7 +2031,8 @@
                     loadClassicQuestion(pool);
                 } else if (mode === 'speed') {
                     setLives(999);
-                    setSpeedTimeLeft(60);
+                    speedTotalRef.current = questCfg.speed.seconds || 60;
+                    setSpeedTimeLeft(speedTotalRef.current);
                     setSpeedTimerActive(true);
                     loadClassicQuestion(pool);
                 } else if (mode === 'match') {
@@ -2054,7 +2081,7 @@
                     speedBadgeRef.current.classList.toggle('border-amber-200', !urgent);
                 }
                 if (speedProgressRef.current) {
-                    speedProgressRef.current.style.width = `${(val / 60) * 100}%`;
+                    speedProgressRef.current.style.width = `${(val / (speedTotalRef.current || 60)) * 100}%`;
                     speedProgressRef.current.classList.toggle('bg-red-500', urgent);
                     speedProgressRef.current.classList.toggle('bg-sky-500', !urgent);
                 }
@@ -2065,9 +2092,9 @@
 
             useEffect(() => {
                 if (gameMode !== 'speed' || gameState !== 'playing' || !speedTimerActive) return;
-                speedTimeLeftRef.current = 60;
-                setSpeedTimeLeft(60);
-                paintSpeedTimer(60);
+                speedTimeLeftRef.current = speedTotalRef.current || 60;
+                setSpeedTimeLeft(speedTotalRef.current || 60);
+                paintSpeedTimer(speedTotalRef.current || 60);
                 speedTimerRef.current = setInterval(() => {
                     const next = speedTimeLeftRef.current <= 1 ? 0 : speedTimeLeftRef.current - 1;
                     speedTimeLeftRef.current = next;
@@ -2089,6 +2116,11 @@
                 setTimeout(() => setXpPopVal(null), 900);
             };
 
+            // true when the answer just given is the last question of this round's chosen length
+            const limitReached = () => {
+                const lim = ((questCfg[gameMode] || {}).questions) || 0;
+                return lim > 0 && questionsAnswered + 1 >= lim;
+            };
             const applyAnswerPreview = (event, isCorrect) => {
                 const el = event?.currentTarget;
                 if (!el) return;
@@ -2119,7 +2151,7 @@
                             awardXP(xp);
                             setScore(prev => prev + xp);
                             setQuestionsAnswered(prev => prev + 1);
-                            if (gameMode === 'classic' && questionsAnswered + 1 >= 10) {
+                            if (limitReached()) {
                                 setTimeout(() => endGame(), 1200);
                             }
                         } else {
@@ -2132,7 +2164,7 @@
                             setQuestionsAnswered(prev => prev + 1);
                             const newLives = lives - 1;
                             setLives(newLives);
-                            if (newLives <= 0 || (gameMode === 'classic' && questionsAnswered + 1 >= 10)) {
+                            if (newLives <= 0 || limitReached()) {
                                 setTimeout(() => endGame(), 1200);
                             }
                         }
@@ -2154,12 +2186,13 @@
                             if (newCombo > maxCombo) setMaxCombo(newCombo);
                             awardXP(12 + (newCombo >= 3 ? newCombo * 3 : 0));
                             setScore(prev => prev + 12); setQuestionsAnswered(prev => prev + 1);
+                            if (limitReached()) setTimeout(() => endGame(), 1200);
                         } else {
                             setFeedbackType('wrong'); SoundEngine.wrong();
                             setCombo(0); setMissedWords(prev => [...prev, fillQuestion.target]);
                             setQuestionsAnswered(prev => prev + 1);
                             const newLives = lives - 1; setLives(newLives);
-                            if (newLives <= 0) { setTimeout(()=>endGame(), 900); }
+                            if (newLives <= 0 || limitReached()) { setTimeout(()=>endGame(), 900); }
                         }
                     }, 10);
                 });
@@ -2185,12 +2218,13 @@
                             if (newCombo > maxCombo) setMaxCombo(newCombo);
                             awardXP(10 + (newCombo >= 3 ? newCombo * 2 : 0));
                             setScore(prev => prev + 10); setQuestionsAnswered(prev => prev + 1);
+                            if (limitReached()) setTimeout(() => endGame(), 1200);
                         } else {
                             setFeedbackType('wrong'); SoundEngine.wrong();
                             setCombo(0); setMissedWords(prev => [...prev, tfQuestion.target]);
                             setQuestionsAnswered(prev => prev + 1);
                             const newLives = lives - 1; setLives(newLives);
-                            if (newLives <= 0) setTimeout(() => endGame(), 1100);
+                            if (newLives <= 0 || limitReached()) setTimeout(() => endGame(), 1100);
                         }
                     }, 10);
                 });
@@ -2210,12 +2244,13 @@
                             if (newCombo > maxCombo) setMaxCombo(newCombo);
                             awardXP(12 + (newCombo >= 3 ? newCombo * 3 : 0));
                             setScore(prev => prev + 12); setQuestionsAnswered(prev => prev + 1);
+                            if (limitReached()) setTimeout(() => endGame(), 1200);
                         } else {
                             setFeedbackType('wrong'); SoundEngine.wrong();
                             setCombo(0); setMissedWords(prev => [...prev, synAntQuestion.target]);
                             setQuestionsAnswered(prev => prev + 1);
                             const newLives = lives - 1; setLives(newLives);
-                            if (newLives <= 0) setTimeout(() => endGame(), 1100);
+                            if (newLives <= 0 || limitReached()) setTimeout(() => endGame(), 1100);
                         }
                     }, 10);
                 });
@@ -2240,11 +2275,17 @@
                     awardXP(15); setScore(prev => prev + 15); setCombo(prev => { const n=prev+1; if(n>maxCombo)setMaxCombo(n); return n; });
                     setSelectedMatchWord(null); setSelectedMatchMeaning(null);
                     if (newPairs.length === matchWords.length) {
-                        setTimeout(() => {
-                            SoundEngine.levelUp();
-                            setSlideDir('next');
-                            startMatchRound(getPool());
-                        }, 800);
+                        const rounds = questCfg.match.rounds || 0;
+                        if (rounds > 0 && matchBoard >= rounds) {
+                            setTimeout(() => { SoundEngine.levelUp(); endGame(); }, 800);
+                        } else {
+                            setTimeout(() => {
+                                SoundEngine.levelUp();
+                                setSlideDir('next');
+                                setMatchBoard(b => b + 1);
+                                startMatchRound(getPool());
+                            }, 800);
+                        }
                     }
                 } else {
                     SoundEngine.wrong();
@@ -2253,6 +2294,60 @@
                     setTimeout(() => { setMatchWrongPair(null); setSelectedMatchWord(null); setSelectedMatchMeaning(null); }, 700);
                 }
             };
+
+            // Per-question countdown (Classic / Fill-in / True-False / Syn-Ant). When it hits zero the
+            // question counts as a wrong answer. The numbers are painted straight into the DOM so the
+            // whole panel does not re-render every second.
+            const activeQTime = (gameState === 'playing' && ['classic', 'fillin', 'truefalse', 'synant'].includes(gameMode)) ? ((questCfg[gameMode] || {}).qTime || 0) : 0;
+            const paintQ = (left, total) => {
+                const urgent = left != null && left <= 3;
+                if (qBadgeRef.current) {
+                    qBadgeRef.current.textContent = left == null ? `⏱ ${total}s` : `⏱ ${left}s`;
+                    qBadgeRef.current.classList.toggle('text-red-600', urgent);
+                }
+                if (qBarRef.current) {
+                    qBarRef.current.style.width = left == null ? '100%' : `${(left / total) * 100}%`;
+                    qBarRef.current.classList.toggle('bg-red-500', urgent);
+                    qBarRef.current.classList.toggle('bg-sky-500', !urgent);
+                }
+            };
+            qTimeoutRef.current = () => {
+                if (selectedAnswer !== null) return;
+                if (gameMode === 'classic') handleAnswer({ id: '__timeout__' }, null);
+                else if (gameMode === 'fillin') handleFillAnswer({ id: '__timeout__' }, null);
+                else if (gameMode === 'truefalse' && tfQuestion) handleTfAnswer(!tfQuestion.isTrue, null);
+                else if (gameMode === 'synant') handleSynAntAnswer({ id: '__timeout__' }, null);
+            };
+            useEffect(() => {
+                clearInterval(qTimerRef.current);
+                if (!activeQTime || selectedAnswer !== null) return;
+                let left = activeQTime;
+                paintQ(left, activeQTime);
+                qTimerRef.current = setInterval(() => {
+                    left -= 1;
+                    paintQ(left, activeQTime);
+                    if (left <= 0) {
+                        clearInterval(qTimerRef.current);
+                        if (qTimeoutRef.current) qTimeoutRef.current();
+                    }
+                }, 1000);
+                return () => clearInterval(qTimerRef.current);
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [activeQTime, selectedAnswer, questionsAnswered, gameState, currentQuestion, fillQuestion, tfQuestion, synAntQuestion]);
+            // "Question 3 / 10" + the per-question timer bar, shown above the question while playing
+            const qLimitNow = ((questCfg[gameMode] || {}).questions) || 0;
+            const qStrip = (qLimitNow > 0 || activeQTime > 0 || (gameMode === 'match' && (questCfg.match.rounds || 0) > 0)) ? (
+                <div className="flex items-center gap-2 flex-wrap text-xs font-bold">
+                    {qLimitNow > 0 && <span className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200">Question {Math.min(questionsAnswered + 1, qLimitNow)} / {qLimitNow}</span>}
+                    {gameMode === 'match' && (questCfg.match.rounds || 0) > 0 && <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">Board {Math.min(matchBoard, questCfg.match.rounds)} / {questCfg.match.rounds}</span>}
+                    {activeQTime > 0 && (
+                        <span className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-sky-50 text-sky-700 border border-sky-200">
+                            <span ref={qBadgeRef}>{`⏱ ${activeQTime}s`}</span>
+                            <span className="w-24 h-2 rounded-full bg-white border border-sky-200 overflow-hidden"><span ref={qBarRef} className="block h-full bg-sky-500" style={{ width: '100%' }} /></span>
+                        </span>
+                    )}
+                </div>
+            ) : null;
 
             const toggleFocusMode = () => {
                 setIsImmersive(prev => !prev);
@@ -2363,7 +2458,7 @@
             // state in WordRevealContent). Keeping the same function reference across renders
             // prevents that remount while still always showing current score/lives/etc.
             const focusShellDataRef = useRef();
-            focusShellDataRef.current = { containerRef, wrapClass, isImmersive, gameState, score, lives, gameMode, speedBadgeImmersiveRef, FocusControls, setGameState, setGameMode, speedTimerRef, setSpeedTimerActive };
+            focusShellDataRef.current = { qStrip, containerRef, wrapClass, isImmersive, gameState, score, lives, gameMode, speedBadgeImmersiveRef, FocusControls, setGameState, setGameMode, speedTimerRef, setSpeedTimerActive };
             const FocusShell = useRef(({ children, className = '' }) => {
                 const d = focusShellDataRef.current;
                 return (
@@ -2398,9 +2493,10 @@
                                         )}
                                     </div>
                                 </div>
+                                {d.gameState === 'playing' && d.qStrip}
                                 {children}
                             </div>
-                        ) : children}
+                        ) : <>{d.gameState === 'playing' && d.qStrip}{children}</>}
                     </div>
                 );
             }).current;
@@ -2485,19 +2581,67 @@
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                         {[
-                            { mode:'classic', icon:'⚔️', title:'Classic Battle', desc:'Answer 10 questions with 5 lives. Combo for bonus XP!', color:'from-indigo-500 to-blue-700' },
-                            { mode:'speed', icon:'⚡', title:'Speed Round', desc:'Answer as many as you can in 60 seconds!', color: 'from-indigo-600 to-slate-700' },
+                            { mode:'classic', icon:'⚔️', title:'Classic Battle', desc:'Beat the question set with 5 lives. Combo for bonus XP!', color:'from-indigo-500 to-blue-700' },
+                            { mode:'speed', icon:'⚡', title:'Speed Round', desc:'Answer as many as you can before the time runs out!', color: 'from-indigo-600 to-slate-700' },
                             { mode:'match', icon:'🔗', title:'Word Match', desc:'Match words to their meanings, Quizlet style!', color:'from-emerald-600 to-teal-700' },
                             { mode:'fillin', icon:'✏️', title:'Fill in the Blank', desc:'A sentence appears — pick the missing word!', color:'from-purple-600 to-violet-700' },
                             { mode:'truefalse', icon:'✅', title:'True or False', desc:'Decide if the meaning shown for a word is correct!', color:'from-slate-600 to-slate-800' },
                             { mode:'synant', icon:'🔀', title:'Synonym / Antonym', desc:'Pick the correct synonym or antonym of the word!', color:'from-fuchsia-600 to-pink-700' },
-                        ].map(m => (
-                            <button key={m.mode} onClick={()=>startGame(m.mode)} className={`bg-gradient-to-br ${m.color} text-white rounded-2xl p-5 text-left shadow-lg hover:scale-[1.02] active:scale-95 transition-all space-y-1`}>
-                                <div className="text-2xl">{m.icon}</div>
-                                <div className="font-black text-base">{m.title}</div>
-                                <div className="text-xs opacity-80">{m.desc}</div>
-                            </button>
-                        ))}
+                        ].map(m => {
+                            const c = questCfg[m.mode] || {};
+                            const hasQ = ['classic', 'fillin', 'truefalse', 'synant'].includes(m.mode);
+                            const selCls = 'bg-white/15 border border-white/30 rounded-lg px-2 py-1 text-xs font-bold text-white focus:outline-none focus:ring-2 focus:ring-white/50';
+                            const opt = (v, label) => <option key={v} value={v} className="text-slate-900">{label}</option>;
+                            const qOpts = m.mode === 'classic' ? [5, 10, 15, 20, 30, 50] : [0, 10, 15, 20, 30, 50];
+                            const summary = m.mode === 'speed' ? `${c.seconds || 60}s on the clock`
+                                : m.mode === 'match' ? (c.rounds ? `${c.rounds} board${c.rounds === 1 ? '' : 's'} of 6 pairs` : 'Endless boards')
+                                : `${c.questions ? `${c.questions} questions` : 'Endless'}${c.qTime ? ` · ${c.qTime}s each` : ''}`;
+                            return (
+                                <div key={m.mode} className={`bg-gradient-to-br ${m.color} text-white rounded-2xl p-4 shadow-lg flex flex-col gap-3`}>
+                                    <div className="flex items-start gap-3">
+                                        <div className="text-2xl leading-none">{m.icon}</div>
+                                        <div className="min-w-0">
+                                            <div className="font-black text-base">{m.title}</div>
+                                            <div className="text-xs opacity-80">{m.desc}</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[11px] font-bold">
+                                        {hasQ && (
+                                            <label className="flex items-center gap-1.5">Questions
+                                                <select value={c.questions} onChange={(e) => setCfg(m.mode, { questions: Number(e.target.value) })} className={selCls}>
+                                                    {qOpts.map(v => opt(v, v === 0 ? 'Endless' : v))}
+                                                </select>
+                                            </label>
+                                        )}
+                                        {hasQ && (
+                                            <label className="flex items-center gap-1.5">Timer
+                                                <select value={c.qTime} onChange={(e) => setCfg(m.mode, { qTime: Number(e.target.value) })} className={selCls}>
+                                                    {[0, 10, 15, 20, 30, 45, 60].map(v => opt(v, v === 0 ? 'Off' : `${v}s each`))}
+                                                </select>
+                                            </label>
+                                        )}
+                                        {m.mode === 'speed' && (
+                                            <label className="flex items-center gap-1.5">Time
+                                                <select value={c.seconds} onChange={(e) => setCfg('speed', { seconds: Number(e.target.value) })} className={selCls}>
+                                                    {[30, 45, 60, 90, 120, 180].map(v => opt(v, `${v}s`))}
+                                                </select>
+                                            </label>
+                                        )}
+                                        {m.mode === 'match' && (
+                                            <label className="flex items-center gap-1.5">Boards
+                                                <select value={c.rounds} onChange={(e) => setCfg('match', { rounds: Number(e.target.value) })} className={selCls}>
+                                                    {[0, 1, 2, 3, 5, 10].map(v => opt(v, v === 0 ? 'Endless' : v))}
+                                                </select>
+                                            </label>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center justify-between gap-2 mt-auto">
+                                        <span className="text-[11px] font-bold bg-white/15 rounded-lg px-2.5 py-1.5">{summary}</span>
+                                        <button type="button" onClick={() => startGame(m.mode)} className="px-4 py-2 rounded-xl bg-white text-slate-900 text-xs font-black hover:bg-slate-100 active:scale-95 transition-all">▶ Start</button>
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
                     {wordPool && wordPool.length < 4 && (
                         <div className="text-center py-6 bg-amber-50 rounded-xl border border-amber-200 text-amber-700 text-sm font-semibold">⚠️ Add at least 4 words to start playing!</div>
@@ -2843,7 +2987,7 @@
                                             : 'from-indigo-900 to-slate-900'
                                     }`}>
                             <div className="text-xs font-bold text-indigo-300 uppercase tracking-widest">
-                                {gameMode === 'classic' ? `⚔️ Classic Battle — Q${questionsAnswered+1}/10` : '⚡ Speed Round — What does this mean?'}
+                                {gameMode === 'classic' ? `⚔️ Classic Battle — Q${questionsAnswered+1}/${questCfg.classic.questions || '∞'}` : '⚡ Speed Round — What does this mean?'}
                             </div>
                                 {reverseMode ? (
                                     <>
@@ -7793,6 +7937,106 @@ Rules:
                 </nav>
             );
 
+            // ===== MEMORIZE TIMER ("study session") =====
+            // Start it from the ⏱ button in the top bar, study words in Home, and it records how long you
+            // spend on each word. When it ends you get a summary and can take an exam on what you covered.
+            const STUDY_LIVE_KEY = 'wordsmart_study_live_v1';
+            const STUDY_HIST_KEY = 'wordsmart_study_history_v1';
+            const [studySession, setStudySession] = useState(() => {
+                try {
+                    const v = JSON.parse(localStorage.getItem(STUDY_LIVE_KEY) || 'null');
+                    return v && v.id ? { ...v, status: 'paused' } : null;   // after a refresh it waits, paused
+                } catch (e) { return null; }
+            });
+            const [studyHistory, setStudyHistory] = useState(() => {
+                try { const v = JSON.parse(localStorage.getItem(STUDY_HIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+            });
+            const [showStudySetup, setShowStudySetup] = useState(false);
+            const [studySummary, setStudySummary] = useState(null);
+            const [studyDraft, setStudyDraft] = useState({ mode: 'countdown', minutes: 15, target: 20 });
+            const [statsView, setStatsView] = useState('overview');
+            const [studyOpenId, setStudyOpenId] = useState(null);
+            const studyCtxRef = useRef({});
+            studyCtxRef.current = { activeTab, selectedWordId, currentWords };
+            useEffect(() => { try { localStorage.setItem(STUDY_HIST_KEY, JSON.stringify(studyHistory)); } catch (e) {} }, [studyHistory]);
+            useEffect(() => {
+                try {
+                    if (studySession) localStorage.setItem(STUDY_LIVE_KEY, JSON.stringify(studySession));
+                    else localStorage.removeItem(STUDY_LIVE_KEY);
+                } catch (e) {}
+            }, [studySession]);
+            // one tick a second while running (and only while this tab is visible, so it measures real attention)
+            useEffect(() => {
+                if (!studySession || studySession.status !== 'running') return;
+                const t = setInterval(() => {
+                    if (document.visibilityState !== 'visible') return;
+                    setStudySession(prev => {
+                        if (!prev || prev.status !== 'running') return prev;
+                        const ctx = studyCtxRef.current;
+                        const next = { ...prev, elapsedSec: prev.elapsedSec + 1 };
+                        if (ctx.activeTab === 'list' && ctx.selectedWordId != null) {
+                            const id = ctx.selectedWordId;
+                            next.perWord = { ...prev.perWord, [id]: (prev.perWord[id] || 0) + 1 };
+                            if (!prev.names[id]) {
+                                const w = (ctx.currentWords || []).find(x => x.id === id);
+                                if (w) next.names = { ...prev.names, [id]: w.word };
+                            }
+                        }
+                        return next;
+                    });
+                }, 1000);
+                return () => clearInterval(t);
+            }, [studySession && studySession.status, studySession && studySession.id]);
+            const fmtClock = (sec) => `${Math.floor(Math.max(0, sec) / 60)}:${String(Math.max(0, sec) % 60).padStart(2, '0')}`;
+            const fmtDur = (sec) => {
+                sec = Math.max(0, Math.round(sec));
+                if (sec < 60) return `${sec}s`;
+                const m = Math.floor(sec / 60), r = sec % 60;
+                return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : (r ? `${m}m ${r}s` : `${m}m`);
+            };
+            const studyCovered = (sess) => Object.values((sess && sess.perWord) || {}).filter(sec => sec >= 3).length;
+            const startStudySession = () => {
+                const minutes = Math.max(1, Math.min(180, Number(studyDraft.minutes) || 15));
+                const target = Math.max(1, Math.min(500, Number(studyDraft.target) || 20));
+                const chunkLabel = selectedChunks.length === 0 ? 'All words' : selectedChunks.map(i => (chunksList[i] ? chunksList[i].label : '')).filter(Boolean).join(' + ');
+                setStudySession({
+                    id: `st_${Date.now()}`, bookId: activeBook.id, startedAt: Date.now(), mode: studyDraft.mode,
+                    plannedSec: minutes * 60, targetWords: target, chunkLabel, status: 'running', elapsedSec: 0, perWord: {}, names: {},
+                });
+                setShowStudySetup(false);
+                setActiveTab('list');
+                triggerToast(studyDraft.mode === 'countdown' ? `Timer started — ${minutes} min to cover ${target} words. Open words in Home to study!` : 'Stopwatch started — open words in Home to study!');
+            };
+            const toggleStudyPause = () => setStudySession(p => (p ? { ...p, status: p.status === 'running' ? 'paused' : 'running' } : p));
+            const finishStudySession = () => {
+                const sess = studySession;
+                if (!sess) return;
+                const perWord = Object.entries(sess.perWord).map(([id, sec]) => ({ id, word: sess.names[id] || '', sec })).sort((a, b) => b.sec - a.sec);
+                const covered = perWord.filter(x => x.sec >= 3);
+                const totalWordSec = covered.reduce((a, x) => a + x.sec, 0);
+                const result = {
+                    id: sess.id, ts: sess.startedAt, bookId: sess.bookId, durationSec: sess.elapsedSec, plannedSec: sess.plannedSec,
+                    mode: sess.mode, targetWords: sess.targetWords, chunkLabel: sess.chunkLabel, covered: covered.length,
+                    avgSecPerWord: covered.length ? Math.round(totalWordSec / covered.length) : 0, perWord: perWord.slice(0, 80),
+                };
+                setStudyHistory(prev => [result, ...prev].slice(0, 200));
+                setStudySummary(result);
+                setStudySession(null);
+            };
+            // time is up → finish automatically
+            useEffect(() => {
+                if (studySession && studySession.status === 'running' && studySession.mode === 'countdown' && studySession.elapsedSec >= studySession.plannedSec) finishStudySession();
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [studySession && studySession.elapsedSec]);
+            const startExamOnStudied = (result) => {
+                const ids = new Set(result.perWord.filter(x => x.sec >= 3).map(x => String(x.id)));
+                const items = currentWords.filter(w => ids.has(String(w.id)));
+                if (!items.length) { triggerToast('Open some words in Home first (at least 3 seconds each), then take the exam.'); return; }
+                setStudySummary(null);
+                setActiveTab('quiz');
+                setTimeout(() => buildAndStartQuiz(items), 150);   // after the quiz tab has reset itself
+            };
+
             // Phones: the top bar slides away while you scroll down and comes back when you scroll up (PC keeps it visible).
             const [barHidden, setBarHidden] = useState(false);
             useEffect(() => {
@@ -7967,8 +8211,29 @@ Rules:
                     </button>
                 );
             };
+            const timerSvg = (
+                <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="13.5" r="7.5" /><path d="M12 9.5v4l2.5 2" /><path d="M9.5 2.5h5M12 2.5v3" />
+                </svg>
+            );
+            const renderStudyChip = () => {
+                if (!studySession) return (
+                    <button type="button" onClick={() => { setStudyDraft(d => ({ ...d, target: Math.max(1, Math.min(200, filteredWords.length || 20)) })); setShowStudySetup(true); }} className={iconBtn} title="Memorize timer" aria-label="Memorize timer">{timerSvg}</button>
+                );
+                const shown = studySession.mode === 'countdown' ? Math.max(0, studySession.plannedSec - studySession.elapsedSec) : studySession.elapsedSec;
+                const running = studySession.status === 'running';
+                return (
+                    <div className="flex items-center gap-1 pl-2.5 pr-1 h-9 rounded-full bg-emerald-500/25 border border-emerald-300/50 text-white shrink-0" title="Memorize timer">
+                        <span className={`text-xs font-black tabular-nums ${running ? '' : 'opacity-60'}`}>{fmtClock(shown)}</span>
+                        <span className="hidden sm:inline text-[10px] font-bold opacity-80">· {studyCovered(studySession)}/{studySession.targetWords}</span>
+                        <button type="button" onClick={toggleStudyPause} className="w-7 h-7 rounded-full bg-white/15 hover:bg-white/30 text-[11px] leading-none" title={running ? 'Pause' : 'Resume'}>{running ? '⏸' : '▶'}</button>
+                        <button type="button" onClick={finishStudySession} className="w-7 h-7 rounded-full bg-white/15 hover:bg-rose-500/70 text-[11px] leading-none" title="Finish and see results">⏹</button>
+                    </div>
+                );
+            };
             const renderHeaderActions = () => (
                 <div className="flex items-center gap-2 shrink-0">
+                    {renderStudyChip()}
                     {renderNotifBell()}
                     {renderMsgButton()}
                     {renderProfileCircle()}
@@ -8017,6 +8282,95 @@ Rules:
                         <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 text-sm font-medium flex items-center gap-2 animate-bounce">
                             <span>💡</span>
                             <span>{toastMessage}</span>
+                        </div>
+                    )}
+
+                    {/* MODAL: MEMORIZE TIMER SETUP */}
+                    {showStudySetup && (
+                        <div className="fixed inset-0 z-[70] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowStudySetup(false)}>
+                            <div className="bg-white text-slate-800 rounded-2xl p-5 w-full max-w-md shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+                                <div>
+                                    <h3 className="text-lg font-black flex items-center gap-2">⏱ Memorize timer</h3>
+                                    <p className="text-xs text-slate-500 mt-0.5">Pick a goal, study the words in Home, then test yourself on what you covered. Your pace per word goes to Stats.</p>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {[['countdown', '⏳ Countdown', 'Fixed time to hit a word goal'], ['stopwatch', '⏱ Stopwatch', 'No limit — see how long it takes']].map(([k, label, hint]) => (
+                                        <button key={k} type="button" onClick={() => setStudyDraft(d => ({ ...d, mode: k }))} className={`rounded-xl border p-2.5 text-left transition-all ${studyDraft.mode === k ? 'bg-indigo-600 border-indigo-600 text-white shadow' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                                            <div className="text-xs font-black">{label}</div>
+                                            <div className={`text-[10px] mt-0.5 ${studyDraft.mode === k ? 'text-indigo-100' : 'text-slate-400'}`}>{hint}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                                {studyDraft.mode === 'countdown' && (
+                                    <div>
+                                        <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-1.5">Time</div>
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                            {[5, 10, 15, 20, 30, 45].map(m => (
+                                                <button key={m} type="button" onClick={() => setStudyDraft(d => ({ ...d, minutes: m }))} className={`px-3 py-1.5 rounded-full text-xs font-bold border ${Number(studyDraft.minutes) === m ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-300 hover:bg-slate-100'}`}>{m} min</button>
+                                            ))}
+                                            <input type="number" min="1" max="180" value={studyDraft.minutes} onChange={(e) => setStudyDraft(d => ({ ...d, minutes: e.target.value }))} className="w-16 px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-bold" aria-label="Custom minutes" />
+                                        </div>
+                                    </div>
+                                )}
+                                <div>
+                                    <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-1.5">Words to cover</div>
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                        <input type="number" min="1" max="500" value={studyDraft.target} onChange={(e) => setStudyDraft(d => ({ ...d, target: e.target.value }))} className="w-20 px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-bold" aria-label="Target words" />
+                                        <button type="button" onClick={() => setStudyDraft(d => ({ ...d, target: Math.max(1, Math.min(500, filteredWords.length || 20)) }))} className="px-3 py-1.5 rounded-full text-xs font-bold border border-slate-300 hover:bg-slate-100">Whole current list ({filteredWords.length})</button>
+                                    </div>
+                                    <p className="text-[11px] text-slate-400 mt-1.5">Studying: <b className="text-slate-600">{selectedChunks.length === 0 ? 'All words' : selectedChunks.map(i => (chunksList[i] ? chunksList[i].label : '')).filter(Boolean).join(' + ')}</b> — pick a chunk in the Chunk filter first if you want one.</p>
+                                </div>
+                                {studyDraft.mode === 'countdown' && Number(studyDraft.target) > 0 && (
+                                    <div className="rounded-xl bg-indigo-50 border border-indigo-100 px-3 py-2 text-xs font-semibold text-indigo-700">
+                                        Pace to beat: about <b>{Math.round((Math.max(1, Number(studyDraft.minutes) || 1) * 60) / Math.max(1, Number(studyDraft.target)))}s per word</b>.
+                                    </div>
+                                )}
+                                <div className="flex gap-2 justify-end">
+                                    <button type="button" onClick={() => setShowStudySetup(false)} className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 text-xs font-bold hover:bg-slate-100">Cancel</button>
+                                    <button type="button" onClick={startStudySession} className="px-5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 shadow">▶ Start</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MODAL: MEMORIZE SESSION RESULT */}
+                    {studySummary && (
+                        <div className="fixed inset-0 z-[70] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                            <div className="bg-white text-slate-800 rounded-2xl p-5 w-full max-w-md shadow-2xl space-y-4">
+                                <div className="text-center">
+                                    <div className="text-4xl">{studySummary.covered >= studySummary.targetWords ? '🎉' : '👏'}</div>
+                                    <h3 className="text-lg font-black mt-1">Session complete</h3>
+                                    <p className="text-xs text-slate-500">{studySummary.chunkLabel}</p>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 text-center">
+                                    {[
+                                        ['Time studied', fmtDur(studySummary.durationSec)],
+                                        ['Words covered', `${studySummary.covered} / ${studySummary.targetWords}`],
+                                        ['Avg per word', studySummary.covered ? `${studySummary.avgSecPerWord}s` : '—'],
+                                        ['Goal', studySummary.covered >= studySummary.targetWords ? 'Reached ✓' : `${Math.max(0, studySummary.targetWords - studySummary.covered)} to go`],
+                                    ].map(([label, val]) => (
+                                        <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 py-2.5">
+                                            <div className="text-base font-black">{val}</div>
+                                            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mt-0.5">{label}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                                {studySummary.perWord.length > 0 && (
+                                    <div>
+                                        <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-1">Words that took longest</div>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {studySummary.perWord.slice(0, 6).map(x => (
+                                                <span key={x.id} className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-800">{x.word || '…'} · {fmtDur(x.sec)}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                <div className="flex flex-col gap-2">
+                                    <button type="button" onClick={() => startExamOnStudied(studySummary)} disabled={studySummary.covered < 1} className="w-full py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-black hover:bg-indigo-700 disabled:opacity-40 shadow">📝 Take an exam on these {studySummary.covered} words</button>
+                                    <button type="button" onClick={() => { setStudySummary(null); setActiveTab('stats'); setStatsView('study'); }} className="w-full py-2 rounded-xl border border-slate-300 text-slate-600 text-xs font-bold hover:bg-slate-100">See it in Stats</button>
+                                    <button type="button" onClick={() => setStudySummary(null)} className="text-[11px] font-bold text-slate-400 hover:text-slate-600">Close</button>
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -10311,7 +10665,13 @@ Rules:
                             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                                 <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">📊 Your Progress</h2>
                                 <p className="text-xs text-slate-400 mt-1">Streaks, daily activity, and a full breakdown of how your vocabulary is growing.</p>
+                                <div className="flex gap-1.5 mt-3">
+                                    {[['overview', '📈 Overview'], ['study', '⏱ Memorizing']].map(([k, label]) => (
+                                        <button key={k} type="button" onClick={() => setStatsView(k)} className={`px-4 py-2 rounded-xl text-xs font-extrabold border transition-all ${statsView === k ? 'bg-indigo-600 text-white border-indigo-600 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>{label}</button>
+                                    ))}
+                                </div>
                             </div>
+                            {statsView === 'overview' && (<>
 
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                 <div className="rounded-2xl p-4 border border-orange-200" style={{ background: 'linear-gradient(135deg,#fff1ea,#fff7e6)' }}>
@@ -10511,6 +10871,107 @@ Rules:
                                     })}
                                 </div>
                             </div>
+                            </>)}
+                            {statsView === 'study' && (() => {
+                                const sessions = studyHistory.filter(h => h.bookId === activeBook.id);
+                                const totalSec = sessions.reduce((a, h) => a + (h.durationSec || 0), 0);
+                                const totalCovered = sessions.reduce((a, h) => a + (h.covered || 0), 0);
+                                const wordSecSum = sessions.reduce((a, h) => a + (h.perWord || []).filter(x => x.sec >= 3).reduce((b, x) => b + x.sec, 0), 0);
+                                const avgPerWord = totalCovered ? Math.round(wordSecSum / totalCovered) : 0;
+                                const best = sessions.filter(h => h.covered > 0).reduce((m, h) => (m === null || h.avgSecPerWord < m ? h.avgSecPerWord : m), null);
+                                const goalHits = sessions.filter(h => h.covered >= h.targetWords).length;
+                                const keyOf = (ts) => localDateKey(new Date(ts));
+                                const days = [];
+                                const today = new Date(); today.setHours(0, 0, 0, 0);
+                                for (let i = 6; i >= 0; i--) { const d = new Date(today); d.setDate(today.getDate() - i); days.push({ key: localDateKey(d), date: d, sec: 0, words: 0 }); }
+                                sessions.forEach(h => { const d = days.find(x => x.key === keyOf(h.ts)); if (d) { d.sec += h.durationSec || 0; d.words += h.covered || 0; } });
+                                const maxSec = Math.max(60, ...days.map(d => d.sec));
+                                // words that cost the most time overall
+                                const agg = {};
+                                sessions.forEach(h => (h.perWord || []).forEach(x => { if (x.sec >= 3 && x.word) { const a = agg[x.word] || (agg[x.word] = { word: x.word, sec: 0, n: 0 }); a.sec += x.sec; a.n += 1; } }));
+                                const slowest = Object.values(agg).map(a => ({ ...a, avg: Math.round(a.sec / a.n) })).sort((a, b) => b.avg - a.avg).slice(0, 8);
+                                const prettyDate = (ts) => new Date(ts).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+                                return (
+                                    <React.Fragment>
+                                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                                            {[
+                                                ['Sessions', sessions.length, 'text-indigo-600'],
+                                                ['Time studied', fmtDur(totalSec), 'text-emerald-600'],
+                                                ['Words covered', totalCovered, 'text-amber-600'],
+                                                ['Avg per word', totalCovered ? `${avgPerWord}s` : '—', 'text-sky-600'],
+                                                ['Goals reached', `${goalHits}/${sessions.length}`, 'text-rose-600'],
+                                            ].map(([label, val, cls]) => (
+                                                <div key={label} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 text-center">
+                                                    <div className={`text-xl font-black ${cls}`}>{val}</div>
+                                                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mt-1">{label}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        {best !== null && <p className="text-xs text-slate-500 -mt-2">Your fastest session averaged <b>{best}s per word</b>.</p>}
+
+                                        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                                            <h3 className="text-sm font-black text-slate-700">Last 7 days — time studied</h3>
+                                            <div className="flex items-end gap-2 h-32">
+                                                {days.map(d => (
+                                                    <div key={d.key} className="flex-1 h-full flex flex-col items-center justify-end gap-1" title={`${d.key}: ${fmtDur(d.sec)} · ${d.words} words`}>
+                                                        <span className="text-[10px] font-bold text-slate-500">{d.sec ? fmtDur(d.sec) : ''}</span>
+                                                        <div className="w-full flex-1 flex items-end"><div className={`w-full rounded-t-md ${d.sec ? 'bg-emerald-500' : 'bg-slate-200'}`} style={{ height: `${Math.max(4, (d.sec / maxSec) * 100)}%` }} /></div>
+                                                        <span className="text-[10px] font-bold text-slate-400">{d.date.toLocaleDateString('en-US', { weekday: 'short' })}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {slowest.length > 0 && (
+                                            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+                                                <h3 className="text-sm font-black text-slate-700">Words that take you longest</h3>
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    {slowest.map(x => <span key={x.word} className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-800">{x.word} · {fmtDur(x.avg)}</span>)}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <h3 className="text-sm font-black text-slate-700">Sessions</h3>
+                                                {sessions.length > 0 && <button type="button" onClick={() => { if (window.confirm('Clear the memorize history for this book?')) setStudyHistory(prev => prev.filter(h => h.bookId !== activeBook.id)); }} className="text-[11px] font-bold text-slate-400 hover:text-rose-500 underline">Clear</button>}
+                                            </div>
+                                            {sessions.length === 0 ? (
+                                                <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">No sessions yet. Tap the ⏱ in the top bar, set a goal, and study some words in Home.</div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {sessions.map(h => {
+                                                        const open = studyOpenId === h.id;
+                                                        const pct = Math.min(100, Math.round((h.covered / Math.max(1, h.targetWords)) * 100));
+                                                        return (
+                                                            <div key={h.id} className="rounded-xl border border-slate-200 bg-slate-50">
+                                                                <button type="button" onClick={() => setStudyOpenId(open ? null : h.id)} className="w-full text-left px-3 py-2.5 flex items-center gap-3">
+                                                                    <div className="flex-1 min-w-0">
+                                                                        <div className="text-xs font-extrabold text-slate-800 truncate">{h.chunkLabel} <span className="font-semibold text-slate-400">· {h.mode === 'countdown' ? `${fmtDur(h.durationSec)} of ${fmtDur(h.plannedSec)}` : fmtDur(h.durationSec)}</span></div>
+                                                                        <div className="text-[10px] text-slate-400">{prettyDate(h.ts)} · {h.covered}/{h.targetWords} words · {h.avgSecPerWord ? `${h.avgSecPerWord}s per word` : 'no words timed'}</div>
+                                                                    </div>
+                                                                    <div className="w-20 shrink-0">
+                                                                        <div className="h-2.5 rounded-full bg-white border border-slate-300 overflow-hidden"><div className={`h-full ${pct >= 100 ? 'bg-emerald-500' : 'bg-amber-400'}`} style={{ width: `${pct}%` }} /></div>
+                                                                    </div>
+                                                                    <span className="text-xs text-slate-400">{open ? '▴' : '▾'}</span>
+                                                                </button>
+                                                                {open && (
+                                                                    <div className="px-3 pb-3 pt-1 border-t border-slate-200">
+                                                                        <div className="flex flex-wrap gap-1.5">
+                                                                            {(h.perWord || []).filter(x => x.sec >= 3).map(x => <span key={x.id} className="px-2 py-0.5 rounded-full bg-white border border-slate-200 text-[11px] font-semibold text-slate-600">{x.word || '…'} · {fmtDur(x.sec)}</span>)}
+                                                                            {(h.perWord || []).filter(x => x.sec >= 3).length === 0 && <span className="text-[11px] text-slate-400">No word reached 3 seconds.</span>}
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </React.Fragment>
+                                );
+                            })()}
                         </div>
                     )}
 
