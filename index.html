@@ -1717,7 +1717,7 @@
             };
         })();
 
-        function ModernVocabGame({ userXP = 0, userLevel = 1, streak = 0, todayLearned = 0, dailyGoal = 10, wordPool, showBangla, triggerToast, onVictoryXP, appTheme, onThemeChange, shortcuts, globalSound, speechAccent = 'us', fieldVisibility = DEFAULT_FIELD_VISIBILITY, familiarityMap = null, onSetFamiliarity = null, onGameFinished = null, onReviewMissed = null, reviewActive = false, reviewCount = 0, onExitReview = null, mistakeBankCount = 0, onOpenMistakeBank = null }) {
+        function ModernVocabGame({ examInclude = { synonyms: true, antonyms: true }, userXP = 0, userLevel = 1, streak = 0, todayLearned = 0, dailyGoal = 10, wordPool, showBangla, triggerToast, onVictoryXP, appTheme, onThemeChange, shortcuts, globalSound, speechAccent = 'us', fieldVisibility = DEFAULT_FIELD_VISIBILITY, familiarityMap = null, onSetFamiliarity = null, onGameFinished = null, onReviewMissed = null, reviewActive = false, reviewCount = 0, onExitReview = null, mistakeBankCount = 0, onOpenMistakeBank = null }) {
             const [gameMode, setGameMode] = useState('menu'); // 'menu','classic','speed','match','fillin','truefalse','synant'
             const [gameState, setGameState] = useState('idle'); // 'idle','playing','summary','paused'
             const [score, setScore] = useState(0);
@@ -1748,6 +1748,15 @@
             const [speedTimerActive, setSpeedTimerActive] = useState(false);
             const [speedTimeLeft, setSpeedTimeLeft] = useState(60);
             const speedTimerRef = useRef(null);
+            // Word Quest never asks the same word twice until every word has had a turn
+            const askedRef = useRef(new Set());
+            const pickFreshQ = (arr) => {
+                let fresh = arr.filter(w => !askedRef.current.has(w.id));
+                if (!fresh.length) { askedRef.current = new Set(); fresh = arr; }
+                const t = fresh[Math.floor(Math.random() * fresh.length)];
+                askedRef.current.add(t.id);
+                return t;
+            };
             // Per-mode settings shown on each Word Quest card (remembered between visits).
             // questions: 0 = endless (until lives run out) · qTime: seconds per question, 0 = off
             const QUEST_CFG_DEFAULT = {
@@ -1926,7 +1935,7 @@
 
             const makeQuestion = useCallback((pool) => {
                 if (!pool || pool.length < 4) return null;
-                const target = pool[Math.floor(Math.random() * pool.length)];
+                const target = pickFreshQ(pool);
                 const distractors = pool.filter(w => w.id !== target.id).sort(() => 0.5 - Math.random()).slice(0, 3);
                 return { target, options: [...distractors, target].sort(() => 0.5 - Math.random()) };
             }, []);
@@ -1935,15 +1944,15 @@
             // the user to identify a real synonym or antonym of it among 4 options.
             const startSynAnt = (pool, pushHistory = true) => {
                 const p = pool || getPool();
-                const eligible = p.filter(w => (w.synonyms && w.synonyms.length) || (w.antonyms && w.antonyms.length));
+                const eligible = p.filter(w => (examInclude.synonyms && w.synonyms && w.synonyms.length) || (examInclude.antonyms && w.antonyms && w.antonyms.length));
                 if (!eligible.length) {
                     triggerToast("No words with synonyms/antonyms yet — add some via Word Manager or Add Word!");
                     setGameMode('menu'); setGameState('idle');
                     return;
                 }
-                const target = eligible[Math.floor(Math.random() * eligible.length)];
-                const hasSyn = target.synonyms && target.synonyms.length > 0;
-                const hasAnt = target.antonyms && target.antonyms.length > 0;
+                const target = pickFreshQ(eligible);
+                const hasSyn = examInclude.synonyms && target.synonyms && target.synonyms.length > 0;
+                const hasAnt = examInclude.antonyms && target.antonyms && target.antonyms.length > 0;
                 const askSynonym = hasSyn && hasAnt ? Math.random() > 0.5 : hasSyn;
                 const relatedList = askSynonym ? target.synonyms : target.antonyms;
                 const correctEntry = relatedList[Math.floor(Math.random() * relatedList.length)];
@@ -1973,7 +1982,7 @@
             const startFillIn = (pool, pushHistory = true) => {
                 const p = pool || getPool();
                 const withSentence = p.filter(w => w.sentence && w.sentence.toLowerCase().includes(String(w.word || '').toLowerCase()));
-                const target = (withSentence.length ? withSentence : p)[Math.floor(Math.random() * (withSentence.length || p.length))];
+                const target = pickFreshQ(withSentence.length ? withSentence : p);
                 const distractors = p.filter(w => w.id !== target.id).sort(() => 0.5 - Math.random()).slice(0, 3);
                 const blankedSentence = target.sentence
                     ? target.sentence.replace(new RegExp(target.word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '_____')
@@ -1986,7 +1995,7 @@
 
             const startTrueFalse = (pool, pushHistory = true) => {
                 const p = pool || getPool();
-                const target = p[Math.floor(Math.random() * p.length)];
+                const target = pickFreshQ(p);
                 const isTrue = Math.random() > 0.45;
                 let shownMeaning = target.meaning_en || target.meaning;
                 let shownWord = null; // set only in Reverse mode: the meaning is fixed and the WORD shown may be wrong
@@ -2014,6 +2023,11 @@
             };
 
             const startGame = (mode) => {
+                if (mode === 'synant' && !examInclude.synonyms && !examInclude.antonyms) {
+                    triggerToast('Synonym / Antonym needs synonyms or antonyms turned on. Open Word Manager → Exam content and switch them on, then come back.');
+                    return;
+                }
+                askedRef.current = new Set();
                 const pool = getPool();
                 if (!pool.length) { triggerToast("Need at least 4 words to play!"); return; }
                 setGameMode(mode);
@@ -2594,7 +2608,7 @@
                             const opt = (v, label) => <option key={v} value={v} className="text-slate-900">{label}</option>;
                             const qOpts = m.mode === 'classic' ? [5, 10, 15, 20, 30, 50] : [0, 10, 15, 20, 30, 50];
                             const summary = m.mode === 'speed' ? `${c.seconds || 60}s on the clock`
-                                : m.mode === 'match' ? (c.rounds ? `${c.rounds} board${c.rounds === 1 ? '' : 's'} of 6 pairs` : 'Endless boards')
+                                : m.mode === 'synant' && !examInclude.synonyms && !examInclude.antonyms ? 'Off in Word Manager — tap Start' : m.mode === 'match' ? (c.rounds ? `${c.rounds} board${c.rounds === 1 ? '' : 's'} of 6 pairs` : 'Endless boards')
                                 : `${c.questions ? `${c.questions} questions` : 'Endless'}${c.qTime ? ` · ${c.qTime}s each` : ''}`;
                             return (
                                 <div key={m.mode} className={`bg-gradient-to-br ${m.color} text-white rounded-2xl p-4 shadow-lg flex flex-col gap-3`}>
@@ -3260,8 +3274,8 @@
             };
             items.forEach((p, i) => {
                 const others = distractItems.filter(o => o.w !== p.w);
-                const syn = (p.s || []).filter(Boolean);
-                const ant = (p.a || []).filter(Boolean);
+                const syn = MP_VIEW_CTX.examInclude.synonyms ? (p.s || []).filter(Boolean) : [];
+                const ant = MP_VIEW_CTX.examInclude.antonyms ? (p.a || []).filter(Boolean) : [];
                 const canFill = !!p.e && new RegExp(mpEscapeRe(p.w), 'i').test(p.e);
                 let type = style === 'mixed' ? types[i % types.length] : style;
                 if (type === 'fill' && !canFill) type = 'meaning';
@@ -3288,7 +3302,7 @@
                 }
                 const options = mpShuffle([answer, ...distractors], rnd);
                 if (options.length < 2) return;
-                out.push({ id: out.length, type, prompt, sub, options, answer });
+                out.push({ id: out.length, type, prompt, sub, options, answer, w: p.w });
             });
             return out;
         }
@@ -3356,6 +3370,7 @@
             const [idx, setIdx] = useState(0);
             const [score, setScore] = useState(0);
             const [picked, setPicked] = useState(null);
+            const wrongRef = useRef([]);
             const doneRef = useRef(false);
             const advanceRef = useRef(null);
 
@@ -3380,6 +3395,7 @@
                 if (picked !== null || timeUp || finishedAll || !started) return;
                 const q = questions[idx];
                 const right = opt === q.answer;
+                if (!right && q.w) wrongRef.current = [...wrongRef.current, q.w];
                 const newScore = right ? score + 1 : score;
                 setPicked(opt);
                 if (right) setScore(newScore);
@@ -3398,7 +3414,7 @@
             useEffect(() => {
                 if (resultsReady && !resultsFiredRef.current) {
                     resultsFiredRef.current = true;
-                    if (onResults) onResults(ranking);
+                    if (onResults) onResults(ranking, { faced: questions.map(q => q.w).filter(Boolean), wrong: Array.from(new Set(wrongRef.current)), score });
                 }
             }, [resultsReady]);
 
@@ -3593,9 +3609,27 @@
         // Word-list-style master/detail used everywhere multiplayer picks or studies:
         // LEFT = family list (main + nested syn/ant) with the pick checkbox on the RIGHT
         // of each row; RIGHT = detail card + gallery swipe to memorize / prepare.
+        // Top-bar chip for a running memorize session. It owns the 1-second re-render so the rest of the app stays still.
+        function StudyChip({ session, liveRef, onToggle, onFinish }) {
+            const [, setTick] = useState(0);
+            useEffect(() => { const t = setInterval(() => setTick(x => x + 1), 1000); return () => clearInterval(t); }, []);
+            const live = liveRef.current;
+            const shown = session.mode === 'countdown' ? Math.max(0, session.plannedSec - live.elapsedSec) : live.elapsedSec;
+            const covered = Object.values(live.perWord).filter(sec => sec >= 3).length;
+            const running = session.status === 'running';
+            return (
+                <div className="flex items-center gap-1 pl-2.5 pr-1 h-9 rounded-full bg-emerald-500/25 border border-emerald-300/50 text-white shrink-0" title="Study session">
+                    <span className={`text-xs font-black tabular-nums ${running ? '' : 'opacity-60'}`}>{`${Math.floor(shown / 60)}:${String(shown % 60).padStart(2, '0')}`}</span>
+                    <span className="hidden sm:inline text-[10px] font-bold opacity-80">· {covered}/{session.targetWords}</span>
+                    <button type="button" onClick={onToggle} className="w-7 h-7 rounded-full bg-white/15 hover:bg-white/30 text-[11px] leading-none" title={running ? 'Pause' : 'Resume'}>{running ? '⏸' : '▶'}</button>
+                    <button type="button" onClick={onFinish} className="w-7 h-7 rounded-full bg-white/15 hover:bg-rose-500/70 text-[11px] leading-none" title="Finish and see results">⏹</button>
+                </div>
+            );
+        }
+
         // Filled in by MultiplayerArena on every render, so the picker/study screens can draw the
         // SAME word card the Home (Word List) screen uses — with the user's own display settings.
-        const MP_VIEW_CTX = { fieldVisibility: null, showBangla: true, accent: 'us', notify: null, localIndex: new Map(), famMap: null, setFamiliarity: null, onEdit: null, onDelete: null };
+        const MP_VIEW_CTX = { fieldVisibility: null, showBangla: true, accent: 'us', notify: null, localIndex: new Map(), famMap: null, setFamiliarity: null, onEdit: null, onDelete: null, examInclude: { synonyms: true, antonyms: true } };
         // Slim (room/chunk) word row -> the item shape WordCardShell expects.
         function mpSlimItemFromRow(r) {
             const asEntries = (list) => (list || []).map((x) => (typeof x === 'string' ? { word: x } : x)).filter((x) => x && x.word);
@@ -3712,7 +3746,7 @@
                         <button type="button" onClick={() => setSelectedKey(row.key)} className="flex-1 min-w-0 text-left">
                             <span className={`text-sm font-bold truncate block ${nested ? 'text-xs font-semibold' : ''} ${tone}`}>{row.w}</span>
                         </button>
-                        {pickable && (
+                        {pickable && (!nested || MP_VIEW_CTX.examInclude[row.role === 'ant' ? 'antonyms' : 'synonyms']) && (
                             <button type="button" title={on ? 'Unpick' : 'Pick for the test'} onClick={() => toggle(row)}
                                 disabled={locked || (!on && picks.length >= wordCount)}
                                 className={`w-5 h-5 rounded border flex items-center justify-center text-[10px] font-black shrink-0 ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300 bg-white'}`}>
@@ -4390,7 +4424,7 @@
             );
         }
 
-        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast, chunkSize = 25, openChatWith, onOpenedChat, fieldVisibility = null, showBangla = true, accent = 'us', homeCtx = null }) {
+        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast, chunkSize = 25, openChatWith, onOpenedChat, fieldVisibility = null, showBangla = true, accent = 'us', homeCtx = null, examInclude = { synonyms: true, antonyms: true }, onPracticeWords = null }) {
             // Every word the player owns, by lower-case spelling — lets room/chunk words (which are shared in a slim
             // form) be shown with their full details when the player has the same word in their own books.
             const mpLocalIndex = useMemo(() => {
@@ -4405,6 +4439,7 @@
             MP_VIEW_CTX.showBangla = showBangla;
             MP_VIEW_CTX.accent = accent;
             MP_VIEW_CTX.notify = triggerToast;
+            MP_VIEW_CTX.examInclude = examInclude;
             MP_VIEW_CTX.famMap = homeCtx ? homeCtx.famMap : null;
             MP_VIEW_CTX.setFamiliarity = homeCtx ? homeCtx.setFamiliarity : null;
             MP_VIEW_CTX.onEdit = homeCtx ? homeCtx.onEdit : null;
@@ -4435,6 +4470,14 @@
             const [usersMap, setUsersMap] = useState({});
             const [invites, setInvites] = useState({});
             const [userSearch, setUserSearch] = useState('');
+            // Record of finished games (this device) so the same words can be practised again later
+            const [mpHistory, setMpHistory] = useState(() => { try { const v = JSON.parse(localStorage.getItem('wordsmart_mp_history_v1') || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } });
+            useEffect(() => { try { localStorage.setItem('wordsmart_mp_history_v1', JSON.stringify(mpHistory)); } catch (e) {} }, [mpHistory]);
+            const saveMpRecord = (rec, meta) => {
+                if (!rec || !rec.faced || !rec.faced.length) return;
+                const label = [meta && meta.bookName, meta && meta.chunkLabel].filter(Boolean).join(' · ') || 'Multiplayer game';
+                setMpHistory(prev => [{ id: `mp_${Date.now()}`, ts: Date.now(), code: (meta && meta.code) || roomCode || '', label, total: rec.faced.length, correct: rec.score || 0, faced: rec.faced, wrong: rec.wrong || [] }, ...prev].slice(0, 50));
+            };
 
             const uid = cloudUser ? cloudUser.uid : null;
             const myName = ((nickname || '').trim() || (cloudUser && cloudUser.displayName) || 'Player').slice(0, 24);
@@ -4899,6 +4942,23 @@
                             </div>
                         );
                     })()}
+                    {view === 'play' && mpHistory.length > 0 && (
+                        <details className="bg-white border border-slate-200 rounded-2xl p-4">
+                            <summary className="cursor-pointer text-sm font-black text-slate-800 flex items-center justify-between">📜 Past games <span className="text-xs text-slate-400 font-bold">{mpHistory.length}</span></summary>
+                            <div className="mt-3 space-y-2 max-h-72 overflow-y-auto">
+                                {mpHistory.slice(0, 15).map(g => (
+                                    <div key={g.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 flex items-center gap-2 flex-wrap">
+                                        <div className="flex-1 min-w-[8rem]">
+                                            <div className="text-xs font-extrabold text-slate-800 truncate">{g.label}</div>
+                                            <div className="text-[10px] text-slate-400">{new Date(g.ts).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })} · {g.correct}/{g.total} correct</div>
+                                        </div>
+                                        <button type="button" onClick={() => onPracticeWords && onPracticeWords(g.faced)} className="px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-700 text-[11px] font-bold hover:bg-indigo-200">📝 Practise all</button>
+                                        {g.wrong.length > 0 && <button type="button" onClick={() => onPracticeWords && onPracticeWords(g.wrong)} className="px-2.5 py-1 rounded-lg bg-rose-100 text-rose-700 text-[11px] font-bold hover:bg-rose-200">🔁 Mistakes only ({g.wrong.length})</button>}
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+                    )}
                     <div className={`grid md:grid-cols-[1.4fr_1fr] gap-4 ${view === 'play' ? '' : 'hidden'}`}>
                         <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
                             <h3 className="text-sm font-black text-slate-800">➕ Create a room</h3>
@@ -4992,7 +5052,7 @@
 
             if (meta.status === 'playing' && meta.startAt && meta.endAt) {
                 return shell(<>{header}
-                    <MpPlay key={`${roomCode}-${meta.round}`} code={roomCode} room={room} uid={uid} serverNow={serverNow} onUpdateMe={updateMe} onPlayAgain={playAgain} onLeave={leaveRoom} isHost={isHost} onResults={(rk) => awardResults(rk, meta.round)} />
+                    <MpPlay key={`${roomCode}-${meta.round}`} code={roomCode} room={room} uid={uid} serverNow={serverNow} onUpdateMe={updateMe} onPlayAgain={playAgain} onLeave={leaveRoom} isHost={isHost} onResults={(rk, rec) => { awardResults(rk, meta.round); saveMpRecord(rec, meta); }} />
                 </>);
             }
 
@@ -6076,6 +6136,7 @@ Rules:
             // QUIZ STATE
             const [quizPhase, setQuizPhase] = useState('setup'); // 'setup' | 'playing' | 'done'
             const quizCardRef = useRef(null);
+            const quizUsedRef = useRef(new Set());   // targets already asked in this quiz (no repeats until all are used)
             const [quizQuestionIndex, setQuizQuestionIndex] = useState(0);
             const [quizQuestions, setQuizQuestions] = useState([]);
             const [quizAnswers, setQuizAnswers] = useState({}); // { [index]: { answerId, submitted } }
@@ -7290,11 +7351,20 @@ Rules:
             // Flashcards, Practice Quiz, and Word Quest, not just as nested display text in
             // the Word List). Each related entry keeps its own id (getRelatedEntryId) so its
             // familiarity status tracks independently, same system as main words.
+            // WORD MANAGER → "Exam content": which words are asked in every exam (Practice Quiz, Word Quest,
+            // Home study exams, Multiplayer). Main words are always in; synonyms / antonyms can be switched off.
+            const [examInclude, setExamInclude] = useState(() => {
+                try {
+                    const v = JSON.parse(localStorage.getItem('wordsmart_exam_include_v1') || 'null');
+                    return { synonyms: v ? v.synonyms !== false : true, antonyms: v ? v.antonyms !== false : true };
+                } catch (e) { return { synonyms: true, antonyms: true }; }
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_exam_include_v1', JSON.stringify(examInclude)); } catch (e) {} }, [examInclude]);
             const playablePool = useMemo(() => {
                 const out = [];
                 filteredWords.forEach(w => {
                     out.push(w);
-                    if (fieldVisibility.synonyms) {
+                    if (examInclude.synonyms) {
                         (w.synonyms || []).forEach((s, i) => {
                             const entryId = getRelatedEntryId(w.id, 'syn', i, s);
                             out.push({
@@ -7316,7 +7386,7 @@ Rules:
                             });
                         });
                     }
-                    if (fieldVisibility.antonyms) {
+                    if (examInclude.antonyms) {
                         (w.antonyms || []).forEach((a, i) => {
                             const entryId = getRelatedEntryId(w.id, 'ant', i, a);
                             out.push({
@@ -7336,7 +7406,7 @@ Rules:
                     }
                 });
                 return out;
-            }, [filteredWords, fieldVisibility.synonyms, fieldVisibility.antonyms]);
+            }, [filteredWords, examInclude.synonyms, examInclude.antonyms]);
 
             // WORD QUEST — review mode pool: the mistaken words themselves, padded
             // with a handful of unique extra words (never duplicated — Word Match
@@ -7434,8 +7504,15 @@ Rules:
             }, [activeBook.id, importRefreshToken, resetListFilters]);
 
             // ===== QUIZ QUESTION GENERATORS (Step 6) =====
+            const pickFresh = (arr) => {
+                let fresh = arr.filter(w => !quizUsedRef.current.has(w.id));
+                if (!fresh.length) { quizUsedRef.current = new Set(); fresh = arr; }
+                const t = fresh[Math.floor(Math.random() * fresh.length)];
+                quizUsedRef.current.add(t.id);
+                return t;
+            };
             const genQuizQuestion = (pool, allWords) => {
-                const target = pool[Math.floor(Math.random() * pool.length)];
+                const target = pickFresh(pool);
                 const distractors = allWords.filter(w => w.id !== target.id).sort(() => 0.5 - Math.random()).slice(0, 3);
                 const options = [...distractors, target].sort(() => 0.5 - Math.random());
                 return { qType: 'quiz', target, options };
@@ -7444,7 +7521,7 @@ Rules:
             const genReverseQuestion = (pool, allWords) => {
                 const withMeaning = pool.filter(w => w.meaning_en || w.meaning);
                 const source = withMeaning.length ? withMeaning : pool;
-                const target = source[Math.floor(Math.random() * source.length)];
+                const target = pickFresh(source);
                 const distractors = allWords.filter(w => w.id !== target.id).sort(() => 0.5 - Math.random()).slice(0, 3);
                 const options = [...distractors.map(w => ({ id: w.id, word: w.word })), { id: target.id, word: target.word }].sort(() => 0.5 - Math.random());
                 return { qType: 'reverse', target, options };
@@ -7455,7 +7532,7 @@ Rules:
                     return s && s.toLowerCase().includes(String(w.word || '').toLowerCase());
                 });
                 const source = withSentence.length ? withSentence : pool;
-                const target = source[Math.floor(Math.random() * source.length)];
+                const target = pickFresh(source);
                 const exampleText = target.example_main || target.sentence || '';
                 const blankedSentence = exampleText
                     ? exampleText.replace(new RegExp(String(target.word).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '_____')
@@ -7468,7 +7545,7 @@ Rules:
                 const field = kind === 'synonym' ? 'synonyms' : 'antonyms';
                 const eligible = pool.filter(w => w[field] && w[field].length);
                 if (!eligible.length) return null;
-                const target = eligible[Math.floor(Math.random() * eligible.length)];
+                const target = pickFresh(eligible);
                 const list = target[field];
                 const correctEntry = list[Math.floor(Math.random() * list.length)];
                 const usedWords = new Set([String(target.word).toLowerCase(), String(correctEntry.word).toLowerCase()]);
@@ -7479,7 +7556,7 @@ Rules:
                 return { qType: kind, target, correctEntry, correctId: correctOption.id, options };
             };
             const genTrueFalseQuestion = (pool) => {
-                const target = pool[Math.floor(Math.random() * pool.length)];
+                const target = pickFresh(pool);
                 const isTrue = Math.random() > 0.45;
                 let shownMeaning = target.meaning_en || target.meaning;
                 if (!isTrue) {
@@ -7489,6 +7566,7 @@ Rules:
                 return { qType: 'truefalse', target, shownMeaning, isTrue };
             };
             const buildQuizQuestions = (pool, allWords, types, count) => {
+                quizUsedRef.current = new Set();
                 const generatorsByType = {
                     quiz: () => genQuizQuestion(pool, allWords),
                     reverse: () => genReverseQuestion(pool, allWords),
@@ -7540,7 +7618,12 @@ Rules:
                 // Pass `pool` as the question source and `distractorSource` as the
                 // wrong-answer source, so every question comes from the selected
                 // chunk/review set while options still pull from the full book.
-                const questions = buildQuizQuestions(pool, distractorSource, quizTypes, countNum);
+                const examTypes = (quizTypes || []).filter(t => (t !== 'synonym' || examInclude.synonyms) && (t !== 'antonym' || examInclude.antonyms));
+                if (!examTypes.length) {
+                    triggerToast('Synonym / Antonym questions are switched off in Word Manager → Exam content. Turn them on, or pick another question type.');
+                    return;
+                }
+                const questions = buildQuizQuestions(pool, distractorSource, examTypes, countNum);
                 if (!questions.length) {
                     triggerToast("Couldn't generate that question type — try selecting more types, or add synonym/antonym data to your words first!");
                     return;
@@ -7938,18 +8021,29 @@ Rules:
             );
 
             // ===== MEMORIZE TIMER ("study session") =====
-            // Start it from the ⏱ button in the top bar, study words in Home, and it records how long you
-            // spend on each word. When it ends you get a summary and can take an exam on what you covered.
+            // Start it from the ⏱ Study button in the top bar, study words in Home, and it records how long you
+            // spend on each word. When it ends you get a summary and can take exams on what you covered.
+            // The running numbers live in a ref and only the little top-bar chip re-renders each second.
             const STUDY_LIVE_KEY = 'wordsmart_study_live_v1';
             const STUDY_HIST_KEY = 'wordsmart_study_history_v1';
+            const STUDY_EXAM_KEY = 'wordsmart_study_exams_v1';
+            const loadStudyBoot = () => { try { const v = JSON.parse(localStorage.getItem(STUDY_LIVE_KEY) || 'null'); return v && v.id ? v : null; } catch (e) { return null; } };
             const [studySession, setStudySession] = useState(() => {
-                try {
-                    const v = JSON.parse(localStorage.getItem(STUDY_LIVE_KEY) || 'null');
-                    return v && v.id ? { ...v, status: 'paused' } : null;   // after a refresh it waits, paused
-                } catch (e) { return null; }
+                const v = loadStudyBoot();
+                if (!v) return null;
+                const { live, ...meta } = v;
+                return { ...meta, status: 'paused' };   // after a refresh it waits, paused
             });
+            const studyLiveRef = useRef(null);
+            if (studyLiveRef.current === null) {
+                const v = loadStudyBoot();
+                studyLiveRef.current = (v && v.live) ? v.live : { elapsedSec: 0, perWord: {}, names: {} };
+            }
             const [studyHistory, setStudyHistory] = useState(() => {
                 try { const v = JSON.parse(localStorage.getItem(STUDY_HIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+            });
+            const [studyExams, setStudyExams] = useState(() => {
+                try { const v = JSON.parse(localStorage.getItem(STUDY_EXAM_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
             });
             const [showStudySetup, setShowStudySetup] = useState(false);
             const [studySummary, setStudySummary] = useState(null);
@@ -7958,51 +8052,55 @@ Rules:
             const [studyOpenId, setStudyOpenId] = useState(null);
             const studyCtxRef = useRef({});
             studyCtxRef.current = { activeTab, selectedWordId, currentWords };
+            const studyExamCtxRef = useRef(null);
+            const finishStudyRef = useRef(null);
             useEffect(() => { try { localStorage.setItem(STUDY_HIST_KEY, JSON.stringify(studyHistory)); } catch (e) {} }, [studyHistory]);
-            useEffect(() => {
+            useEffect(() => { try { localStorage.setItem(STUDY_EXAM_KEY, JSON.stringify(studyExams)); } catch (e) {} }, [studyExams]);
+            const saveStudyLive = () => {
                 try {
-                    if (studySession) localStorage.setItem(STUDY_LIVE_KEY, JSON.stringify(studySession));
+                    if (studySession) localStorage.setItem(STUDY_LIVE_KEY, JSON.stringify({ ...studySession, live: studyLiveRef.current }));
                     else localStorage.removeItem(STUDY_LIVE_KEY);
                 } catch (e) {}
+            };
+            useEffect(() => { saveStudyLive(); // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [studySession]);
-            // one tick a second while running (and only while this tab is visible, so it measures real attention)
             useEffect(() => {
                 if (!studySession || studySession.status !== 'running') return;
+                let n = 0;
                 const t = setInterval(() => {
-                    if (document.visibilityState !== 'visible') return;
-                    setStudySession(prev => {
-                        if (!prev || prev.status !== 'running') return prev;
-                        const ctx = studyCtxRef.current;
-                        const next = { ...prev, elapsedSec: prev.elapsedSec + 1 };
-                        if (ctx.activeTab === 'list' && ctx.selectedWordId != null) {
-                            const id = ctx.selectedWordId;
-                            next.perWord = { ...prev.perWord, [id]: (prev.perWord[id] || 0) + 1 };
-                            if (!prev.names[id]) {
-                                const w = (ctx.currentWords || []).find(x => x.id === id);
-                                if (w) next.names = { ...prev.names, [id]: w.word };
-                            }
+                    if (document.visibilityState !== 'visible') return;   // only counts while you are really looking at it
+                    const live = studyLiveRef.current;
+                    const ctx = studyCtxRef.current;
+                    live.elapsedSec += 1;
+                    if (ctx.activeTab === 'list' && ctx.selectedWordId != null) {
+                        const id = ctx.selectedWordId;
+                        live.perWord[id] = (live.perWord[id] || 0) + 1;
+                        if (!live.names[id]) {
+                            const w = (ctx.currentWords || []).find(x => x.id === id);
+                            if (w) live.names[id] = w.word;
                         }
-                        return next;
-                    });
+                    }
+                    if (++n % 5 === 0) saveStudyLive();
+                    if (studySession.mode === 'countdown' && live.elapsedSec >= studySession.plannedSec) {
+                        clearInterval(t);
+                        if (finishStudyRef.current) finishStudyRef.current();
+                    }
                 }, 1000);
                 return () => clearInterval(t);
+            // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [studySession && studySession.status, studySession && studySession.id]);
-            const fmtClock = (sec) => `${Math.floor(Math.max(0, sec) / 60)}:${String(Math.max(0, sec) % 60).padStart(2, '0')}`;
             const fmtDur = (sec) => {
                 sec = Math.max(0, Math.round(sec));
                 if (sec < 60) return `${sec}s`;
                 const m = Math.floor(sec / 60), r = sec % 60;
                 return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : (r ? `${m}m ${r}s` : `${m}m`);
             };
-            const studyCovered = (sess) => Object.values((sess && sess.perWord) || {}).filter(sec => sec >= 3).length;
             const startStudySession = () => {
                 const minutes = Math.max(1, Math.min(180, Number(studyDraft.minutes) || 15));
                 const target = Math.max(1, Math.min(500, Number(studyDraft.target) || 20));
                 const chunkLabel = selectedChunks.length === 0 ? 'All words' : selectedChunks.map(i => (chunksList[i] ? chunksList[i].label : '')).filter(Boolean).join(' + ');
-                setStudySession({
-                    id: `st_${Date.now()}`, bookId: activeBook.id, startedAt: Date.now(), mode: studyDraft.mode,
-                    plannedSec: minutes * 60, targetWords: target, chunkLabel, status: 'running', elapsedSec: 0, perWord: {}, names: {},
-                });
+                studyLiveRef.current = { elapsedSec: 0, perWord: {}, names: {} };
+                setStudySession({ id: `st_${Date.now()}`, bookId: activeBook.id, startedAt: Date.now(), mode: studyDraft.mode, plannedSec: minutes * 60, targetWords: target, chunkLabel, status: 'running' });
                 setShowStudySetup(false);
                 setActiveTab('list');
                 triggerToast(studyDraft.mode === 'countdown' ? `Timer started — ${minutes} min to cover ${target} words. Open words in Home to study!` : 'Stopwatch started — open words in Home to study!');
@@ -8011,31 +8109,56 @@ Rules:
             const finishStudySession = () => {
                 const sess = studySession;
                 if (!sess) return;
-                const perWord = Object.entries(sess.perWord).map(([id, sec]) => ({ id, word: sess.names[id] || '', sec })).sort((a, b) => b.sec - a.sec);
+                const live = studyLiveRef.current;
+                const perWord = Object.entries(live.perWord).map(([id, sec]) => ({ id, word: live.names[id] || '', sec })).sort((a, b) => b.sec - a.sec);
                 const covered = perWord.filter(x => x.sec >= 3);
                 const totalWordSec = covered.reduce((a, x) => a + x.sec, 0);
                 const result = {
-                    id: sess.id, ts: sess.startedAt, bookId: sess.bookId, durationSec: sess.elapsedSec, plannedSec: sess.plannedSec,
+                    id: sess.id, ts: sess.startedAt, bookId: sess.bookId, durationSec: live.elapsedSec, plannedSec: sess.plannedSec,
                     mode: sess.mode, targetWords: sess.targetWords, chunkLabel: sess.chunkLabel, covered: covered.length,
                     avgSecPerWord: covered.length ? Math.round(totalWordSec / covered.length) : 0, perWord: perWord.slice(0, 80),
                 };
                 setStudyHistory(prev => [result, ...prev].slice(0, 200));
                 setStudySummary(result);
+                studyLiveRef.current = { elapsedSec: 0, perWord: {}, names: {} };
                 setStudySession(null);
             };
-            // time is up → finish automatically
-            useEffect(() => {
-                if (studySession && studySession.status === 'running' && studySession.mode === 'countdown' && studySession.elapsedSec >= studySession.plannedSec) finishStudySession();
-            // eslint-disable-next-line react-hooks/exhaustive-deps
-            }, [studySession && studySession.elapsedSec]);
+            finishStudyRef.current = finishStudySession;
+            // Exam on the words of a session (from the result window OR from Stats — as many times as you like)
+            // Practise a list of words (texts) that came from a past multiplayer game
+            const practiceWordsFromText = (texts) => {
+                const wanted = new Set((texts || []).map(t => String(t).toLowerCase()));
+                const items = currentWords.filter(w => wanted.has(String(w.word || '').toLowerCase()));
+                if (!items.length) { triggerToast("Those words aren't in this book, so I can't build a quiz from them here."); return; }
+                setActiveTab('quiz');
+                setTimeout(() => buildAndStartQuiz(items), 150);
+            };
             const startExamOnStudied = (result) => {
-                const ids = new Set(result.perWord.filter(x => x.sec >= 3).map(x => String(x.id)));
+                const ids = new Set((result.perWord || []).filter(x => x.sec >= 3).map(x => String(x.id)));
                 const items = currentWords.filter(w => ids.has(String(w.id)));
-                if (!items.length) { triggerToast('Open some words in Home first (at least 3 seconds each), then take the exam.'); return; }
+                if (!items.length) { triggerToast('No words from that session were found in this book (a word needs 3+ seconds in Home to count).'); return; }
                 setStudySummary(null);
                 setActiveTab('quiz');
-                setTimeout(() => buildAndStartQuiz(items), 150);   // after the quiz tab has reset itself
+                setTimeout(() => {
+                    studyExamCtxRef.current = { sessionId: result.id, bookId: result.bookId, chunkLabel: result.chunkLabel };
+                    buildAndStartQuiz(items);
+                }, 150);   // after the quiz tab has reset itself
             };
+            // remember the mark when such an exam finishes; forget the link if the exam is abandoned
+            const prevQuizPhaseRef2 = useRef(quizPhase);
+            useEffect(() => {
+                const prev = prevQuizPhaseRef2.current;
+                prevQuizPhaseRef2.current = quizPhase;
+                const ctx = studyExamCtxRef.current;
+                if (!ctx) return;
+                if (quizPhase === 'done') {
+                    studyExamCtxRef.current = null;
+                    setStudyExams(list => [{ id: `ex_${Date.now()}`, sessionId: ctx.sessionId, bookId: ctx.bookId, chunkLabel: ctx.chunkLabel, ts: Date.now(), correct: quizScore, total: quizQuestions.length }, ...list].slice(0, 400));
+                } else if (prev === 'playing' && quizPhase === 'setup') {
+                    studyExamCtxRef.current = null;
+                }
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [quizPhase]);
 
             // Phones: the top bar slides away while you scroll down and comes back when you scroll up (PC keeps it visible).
             const [barHidden, setBarHidden] = useState(false);
@@ -8218,18 +8341,13 @@ Rules:
             );
             const renderStudyChip = () => {
                 if (!studySession) return (
-                    <button type="button" onClick={() => { setStudyDraft(d => ({ ...d, target: Math.max(1, Math.min(200, filteredWords.length || 20)) })); setShowStudySetup(true); }} className={iconBtn} title="Memorize timer" aria-label="Memorize timer">{timerSvg}</button>
+                    <button type="button" onClick={() => { setStudyDraft(d => ({ ...d, target: Math.max(1, Math.min(200, filteredWords.length || 20)) })); setShowStudySetup(true); }}
+                        className="h-9 px-3 rounded-full bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-300/40 text-white text-xs font-black flex items-center gap-1.5 shrink-0 transition-colors"
+                        title="Start a study session with a timer — then take an exam on what you covered" aria-label="Start a study session">
+                        {timerSvg}<span>Study</span><span className="hidden lg:inline text-[10px] font-bold opacity-70">timer</span>
+                    </button>
                 );
-                const shown = studySession.mode === 'countdown' ? Math.max(0, studySession.plannedSec - studySession.elapsedSec) : studySession.elapsedSec;
-                const running = studySession.status === 'running';
-                return (
-                    <div className="flex items-center gap-1 pl-2.5 pr-1 h-9 rounded-full bg-emerald-500/25 border border-emerald-300/50 text-white shrink-0" title="Memorize timer">
-                        <span className={`text-xs font-black tabular-nums ${running ? '' : 'opacity-60'}`}>{fmtClock(shown)}</span>
-                        <span className="hidden sm:inline text-[10px] font-bold opacity-80">· {studyCovered(studySession)}/{studySession.targetWords}</span>
-                        <button type="button" onClick={toggleStudyPause} className="w-7 h-7 rounded-full bg-white/15 hover:bg-white/30 text-[11px] leading-none" title={running ? 'Pause' : 'Resume'}>{running ? '⏸' : '▶'}</button>
-                        <button type="button" onClick={finishStudySession} className="w-7 h-7 rounded-full bg-white/15 hover:bg-rose-500/70 text-[11px] leading-none" title="Finish and see results">⏹</button>
-                    </div>
-                );
+                return <StudyChip session={studySession} liveRef={studyLiveRef} onToggle={toggleStudyPause} onFinish={finishStudySession} />;
             };
             const renderHeaderActions = () => (
                 <div className="flex items-center gap-2 shrink-0">
@@ -9728,24 +9846,24 @@ Rules:
                                                     </button>
                                                     {((item.synonyms || []).length > 0 || (item.antonyms || []).length > 0) && (
                                                         <div className="pb-1">
-                                                            {(item.synonyms || []).map((s) => (
-                                                                <button
-                                                                    key={s.id}
-                                                                    onClick={() => selectWordFromList(item.id)}
-                                                                    className="block w-full text-left pl-6 pr-2 py-1 text-xs truncate text-emerald-700"
-                                                                >
-                                                                    {s.word}
-                                                                </button>
-                                                            ))}
-                                                            {(item.antonyms || []).map((a) => (
-                                                                <button
-                                                                    key={a.id}
-                                                                    onClick={() => selectWordFromList(item.id)}
-                                                                    className="block w-full text-left pl-6 pr-2 py-1 text-xs truncate text-rose-700"
-                                                                >
-                                                                    {a.word}
-                                                                </button>
-                                                            ))}
+                                                            {(item.synonyms || []).map((s, si) => {
+                                                                const lv = getWordFamiliarityLevel(currentFamiliarityMap, getRelatedEntryId(item.id, 'syn', si, s));
+                                                                return (
+                                                                    <button key={s.id || `syn-${si}`} onClick={() => selectWordFromList(item.id)} className="w-full text-left pl-6 pr-2 py-1 text-xs flex items-center justify-between gap-2 text-emerald-700">
+                                                                        <span className="truncate">{s.word}</span>
+                                                                        <span className={`w-2 h-2 rounded-full shrink-0 ${lv === 'familiar' ? 'bg-emerald-500' : lv === 'semi' ? 'bg-amber-400' : 'bg-slate-300'}`}></span>
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                            {(item.antonyms || []).map((a, ai) => {
+                                                                const lv = getWordFamiliarityLevel(currentFamiliarityMap, getRelatedEntryId(item.id, 'ant', ai, a));
+                                                                return (
+                                                                    <button key={a.id || `ant-${ai}`} onClick={() => selectWordFromList(item.id)} className="w-full text-left pl-6 pr-2 py-1 text-xs flex items-center justify-between gap-2 text-rose-700">
+                                                                        <span className="truncate">{a.word}</span>
+                                                                        <span className={`w-2 h-2 rounded-full shrink-0 ${lv === 'familiar' ? 'bg-emerald-500' : lv === 'semi' ? 'bg-amber-400' : 'bg-slate-300'}`}></span>
+                                                                    </button>
+                                                                );
+                                                            })}
                                                         </div>
                                                     )}
                                                 </div>
@@ -9792,13 +9910,13 @@ Rules:
                                             const wi = filteredWords.findIndex(x => x.id === w.id);
                                             if (wi >= 0) setCurrentPage(Math.floor(wi / itemsPerPage) + 1);
                                         };
-                                        const cardFor = (w) => <WordCard item={w} famLevel={getFamiliarity(w.id)} detailMode />;
+                                        const cardFor = (w) => WordCard({ item: w, famLevel: getFamiliarity(w.id), detailMode: true });
                                         return (
                                             <SwipeDeck
                                                 label={`${idx + 1} / ${filteredWords.length}`}
                                                 prev={prevItem ? { node: cardFor(prevItem) } : null}
                                                 next={nextItem ? { node: cardFor(nextItem) } : null}
-                                                cur={<WordCard item={selectedItem} famLevel={famLevel} detailMode />}
+                                                cur={WordCard({ item: selectedItem, famLevel, detailMode: true })}
                                                 onPrev={() => goToWord(prevItem)}
                                                 onNext={() => goToWord(nextItem)}
                                             />
@@ -10595,6 +10713,7 @@ Rules:
                     {/* MODE 4: MODERN GAME MODE */}
                     {activeTab === 'game' && (
                         <ModernVocabGame
+                            examInclude={examInclude}
                             userXP={userXP}
                             userLevel={userLevel}
                             streak={currentStreak}
@@ -10638,6 +10757,8 @@ Rules:
                                 fieldVisibility={fieldVisibility}
                                 showBangla={showBangla}
                                 accent={speechAccent}
+                                examInclude={examInclude}
+                                onPracticeWords={practiceWordsFromText}
                                 homeCtx={{
                                     famMap: currentFamiliarityMap,
                                     setFamiliarity: setWordFamiliarity,
@@ -10880,6 +11001,11 @@ Rules:
                                 const avgPerWord = totalCovered ? Math.round(wordSecSum / totalCovered) : 0;
                                 const best = sessions.filter(h => h.covered > 0).reduce((m, h) => (m === null || h.avgSecPerWord < m ? h.avgSecPerWord : m), null);
                                 const goalHits = sessions.filter(h => h.covered >= h.targetWords).length;
+                                const bookExams = studyExams.filter(e => e.bookId === activeBook.id);
+                                const pctOfExam = (e) => (e.total ? Math.round((e.correct / e.total) * 100) : 0);
+                                const bestMark = bookExams.length ? Math.max(...bookExams.map(pctOfExam)) : null;
+                                const bestByChunk = {};
+                                bookExams.forEach(e => { const k = e.chunkLabel || 'All words'; bestByChunk[k] = Math.max(bestByChunk[k] || 0, pctOfExam(e)); });
                                 const keyOf = (ts) => localDateKey(new Date(ts));
                                 const days = [];
                                 const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -10893,13 +11019,15 @@ Rules:
                                 const prettyDate = (ts) => new Date(ts).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
                                 return (
                                     <React.Fragment>
-                                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                                             {[
                                                 ['Sessions', sessions.length, 'text-indigo-600'],
                                                 ['Time studied', fmtDur(totalSec), 'text-emerald-600'],
                                                 ['Words covered', totalCovered, 'text-amber-600'],
                                                 ['Avg per word', totalCovered ? `${avgPerWord}s` : '—', 'text-sky-600'],
                                                 ['Goals reached', `${goalHits}/${sessions.length}`, 'text-rose-600'],
+                                                ['Exams taken', bookExams.length, 'text-violet-600'],
+                                                ['Best exam mark', bestMark === null ? '—' : `${bestMark}%`, 'text-emerald-600'],
                                             ].map(([label, val, cls]) => (
                                                 <div key={label} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 text-center">
                                                     <div className={`text-xl font-black ${cls}`}>{val}</div>
@@ -10908,6 +11036,14 @@ Rules:
                                             ))}
                                         </div>
                                         {best !== null && <p className="text-xs text-slate-500 -mt-2">Your fastest session averaged <b>{best}s per word</b>.</p>}
+                                        {Object.keys(bestByChunk).length > 0 && (
+                                            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+                                                <h3 className="text-sm font-black text-slate-700">🏆 Best exam mark by chunk</h3>
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    {Object.entries(bestByChunk).sort((a, b) => b[1] - a[1]).map(([k, v]) => <span key={k} className="px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-700">{k} · {v}%</span>)}
+                                                </div>
+                                            </div>
+                                        )}
 
                                         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
                                             <h3 className="text-sm font-black text-slate-700">Last 7 days — time studied</h3>
@@ -10943,6 +11079,8 @@ Rules:
                                                     {sessions.map(h => {
                                                         const open = studyOpenId === h.id;
                                                         const pct = Math.min(100, Math.round((h.covered / Math.max(1, h.targetWords)) * 100));
+                                                        const attempts = studyExams.filter(e => e.sessionId === h.id);
+                                                        const chunkBest = studyExams.filter(e => e.bookId === h.bookId && (e.chunkLabel || 'All words') === (h.chunkLabel || 'All words')).reduce((m, e) => Math.max(m, pctOfExam(e)), -1);
                                                         return (
                                                             <div key={h.id} className="rounded-xl border border-slate-200 bg-slate-50">
                                                                 <button type="button" onClick={() => setStudyOpenId(open ? null : h.id)} className="w-full text-left px-3 py-2.5 flex items-center gap-3">
@@ -10955,6 +11093,15 @@ Rules:
                                                                     </div>
                                                                     <span className="text-xs text-slate-400">{open ? '▴' : '▾'}</span>
                                                                 </button>
+                                                                <div className="px-3 pb-2.5 pt-2 border-t border-slate-200 flex flex-wrap items-center gap-1.5">
+                                                                    <button type="button" onClick={() => startExamOnStudied(h)} disabled={h.covered < 1} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-[11px] font-black hover:bg-indigo-700 disabled:opacity-40">📝 Take exam ({h.covered} words)</button>
+                                                                    {attempts.length === 0 && <span className="text-[11px] text-slate-400">No exam taken yet</span>}
+                                                                    {attempts.slice(0, 6).map(e => (
+                                                                        <span key={e.id} title={prettyDate(e.ts)} className={`px-2 py-0.5 rounded-full border text-[11px] font-bold ${pctOfExam(e) >= 80 ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : pctOfExam(e) >= 50 ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-rose-50 border-rose-200 text-rose-600'}`}>{e.correct}/{e.total} · {pctOfExam(e)}%</span>
+                                                                    ))}
+                                                                    {attempts.length > 6 && <span className="text-[11px] text-slate-400">+{attempts.length - 6} more</span>}
+                                                                    {chunkBest >= 0 && <span className="ml-auto text-[11px] font-bold text-emerald-600">🏆 Best on this chunk: {chunkBest}%</span>}
+                                                                </div>
                                                                 {open && (
                                                                     <div className="px-3 pb-3 pt-1 border-t border-slate-200">
                                                                         <div className="flex flex-wrap gap-1.5">
@@ -11102,6 +11249,20 @@ Rules:
                                         <span className="text-[11px] opacity-60 ml-1">{currentWords.length} words → {chunksList.length} chunk{chunksList.length === 1 ? '' : 's'}</span>
                                     </div>
                                 </div>
+                            </div>
+
+                            {/* EXAM CONTENT */}
+                            <div className={`rounded-2xl border shadow-sm p-4 space-y-3 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
+                                <div>
+                                    <h2 className="text-lg font-extrabold flex items-center gap-2"><span>🎯</span> Exam content</h2>
+                                    <p className="text-[11px] mt-0.5 opacity-70">Which words get asked in Practice Quiz, Word Quest, study exams from Home, and Multiplayer. Main words are always included.</p>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                    <ToggleRow label="Main words" hint="Always on" checked={true} onToggle={() => {}} disabled appTheme={appTheme} />
+                                    <ToggleRow label="Synonyms" hint="Ask them as questions too" checked={examInclude.synonyms} onToggle={() => setExamInclude(p => ({ ...p, synonyms: !p.synonyms }))} appTheme={appTheme} />
+                                    <ToggleRow label="Antonyms" hint="Ask them as questions too" checked={examInclude.antonyms} onToggle={() => setExamInclude(p => ({ ...p, antonyms: !p.antonyms }))} appTheme={appTheme} />
+                                </div>
+                                <p className="text-[11px] opacity-60">Tip: the Synonym / Antonym game and quiz questions need these switched on — you'll get a reminder if they're off.</p>
                             </div>
 
                             {/* DISPLAY SETTINGS */}
