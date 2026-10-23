@@ -5736,14 +5736,17 @@
             });
             const [menuOpen, setMenuOpen] = useState(false);
             useEffect(() => { try { localStorage.setItem('wordsmart_shell_layout_v2', shellLayout); } catch (e) {} }, [shellLayout]);
+            const navSvg = (children) => (cls = 'w-[18px] h-[18px]') => (
+                <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
+            );
             const APP_NAV_TABS = [
-                { id: 'list', label: '🏠 Home', desc: 'Browse & Study' },
-                { id: 'flashcards', label: '🎴 Flashcards', desc: 'Memorize & Flip' },
-                { id: 'quiz', label: '🧠 Practice Quiz', desc: 'Test Knowledge' },
-                { id: 'game', label: '🎮 Word Quest', desc: 'Canvas Arena & Bosses' },
-                { id: 'multi', label: '🌐 Multiplayer', desc: 'Play with friends' },
-                { id: 'stats', label: '📊 Stats & Streak', desc: 'Progress & Activity' },
-                { id: 'manage', label: '⚙️ Word Manager', desc: 'Pages & Import' },
+                { id: 'list', label: 'Home', short: 'Home', desc: 'Browse & Study', icon: navSvg(<><path d="M3 11l9-8 9 8" /><path d="M5 10v10h5v-6h4v6h5V10" /></>) },
+                { id: 'flashcards', label: 'Flashcards', short: 'Cards', desc: 'Memorize & Flip', icon: navSvg(<><rect x="3" y="7" width="14" height="12" rx="2" /><path d="M7 4h12a2 2 0 0 1 2 2v10" /></>) },
+                { id: 'quiz', label: 'Practice Quiz', short: 'Quiz', desc: 'Test Knowledge', icon: navSvg(<><rect x="5" y="4" width="14" height="17" rx="2" /><path d="M9 4V3h6v1" /><path d="M9 13l2 2 4-4" /></>) },
+                { id: 'game', label: 'Word Quest', short: 'Quest', desc: 'Canvas Arena & Bosses', icon: navSvg(<><rect x="2" y="7" width="20" height="11" rx="5.5" /><path d="M7 10.5v4M5 12.5h4" /><circle cx="16" cy="11.5" r="0.9" fill="currentColor" /><circle cx="18.2" cy="13.8" r="0.9" fill="currentColor" /></>) },
+                { id: 'multi', label: 'Multiplayer', short: 'Play', desc: 'Play with friends', icon: navSvg(<><circle cx="9" cy="8" r="3" /><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6" /><circle cx="17" cy="9" r="2.5" /><path d="M17 14c2.8 0 5 2.2 5 5" /></>) },
+                { id: 'stats', label: 'Stats & Streak', short: 'Stats', desc: 'Progress & Activity', icon: navSvg(<><rect x="4" y="11" width="3.5" height="9" rx="1" /><rect x="10.25" y="4" width="3.5" height="16" rx="1" /><rect x="16.5" y="8" width="3.5" height="12" rx="1" /></>) },
+                { id: 'manage', label: 'Word Manager', short: 'Manage', desc: 'Pages & Import', icon: navSvg(<><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></>) },
             ];
             const goTab = (id) => { setActiveTab(id); setMenuOpen(false); };
             const [searchQuery, setSearchQuery] = useState('');
@@ -8007,7 +8010,7 @@ Rules:
                                     : 'text-slate-700 hover:bg-slate-100'
                             }`}
                         >
-                            <span className="truncate">{tab.label}</span>
+                            {tab.icon('w-[18px] h-[18px] shrink-0')}<span className="truncate">{tab.label}</span>
                         </button>
                     ))}
                     <button
@@ -8015,7 +8018,7 @@ Rules:
                         onClick={() => { setMenuOpen(false); setShowProfileModal(true); }}
                         className="w-full text-left px-3 py-2.5 rounded-xl text-sm font-bold text-slate-700 hover:bg-slate-100"
                     >
-                        👤 Profile
+                        <span className="flex items-center gap-2"><svg className="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" /></svg>Profile</span>
                     </button>
                 </nav>
             );
@@ -8095,14 +8098,33 @@ Rules:
                 const m = Math.floor(sec / 60), r = sec % 60;
                 return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : (r ? `${m}m ${r}s` : `${m}m`);
             };
+            const studyPickBook = (bk) => {
+                const n = (allWords[bk] || []).length;
+                setStudyDraft(d => ({ ...d, bookId: bk, chunkIdx: -1, target: Math.max(1, Math.min(500, n || 20)) }));
+            };
+            const studyPickChunk = (val) => {
+                const idx = Number(val);
+                const bk = studyDraft.bookId || activeBook.id;
+                const chunks = mpChunkList(allWords[bk] || [], chunkSize);
+                const n = idx >= 0 && chunks[idx] ? chunks[idx].words.length : (idx === -2 ? filteredWords.length : (allWords[bk] || []).length);
+                setStudyDraft(d => ({ ...d, chunkIdx: idx, target: Math.max(1, Math.min(500, n || 20)) }));
+            };
             const startStudySession = () => {
                 const minutes = Math.max(1, Math.min(180, Number(studyDraft.minutes) || 15));
                 const target = Math.max(1, Math.min(500, Number(studyDraft.target) || 20));
-                const chunkLabel = selectedChunks.length === 0 ? 'All words' : selectedChunks.map(i => (chunksList[i] ? chunksList[i].label : '')).filter(Boolean).join(' + ');
+                const bk = studyDraft.bookId || activeBook.id;
+                const bkChunks = mpChunkList(allWords[bk] || [], chunkSize);
+                const ci = studyDraft.chunkIdx === undefined ? -1 : studyDraft.chunkIdx;
+                let chunkLabel, newSel;
+                if (ci === -2) { newSel = selectedChunks; chunkLabel = selectedChunks.map(i => (chunksList[i] ? chunksList[i].label : '')).filter(Boolean).join(' + ') || 'All words'; }
+                else if (ci >= 0 && bkChunks[ci]) { newSel = [ci]; chunkLabel = bkChunks[ci].label; }
+                else { newSel = []; chunkLabel = 'All words'; }
                 studyLiveRef.current = { elapsedSec: 0, perWord: {}, names: {} };
-                setStudySession({ id: `st_${Date.now()}`, bookId: activeBook.id, startedAt: Date.now(), mode: studyDraft.mode, plannedSec: minutes * 60, targetWords: target, chunkLabel, status: 'running' });
+                setStudySession({ id: `st_${Date.now()}`, bookId: bk, startedAt: Date.now(), mode: studyDraft.mode, plannedSec: minutes * 60, targetWords: target, chunkLabel, status: 'running' });
                 setShowStudySetup(false);
                 setActiveTab('list');
+                if (bk !== activeBook.id) { setSelectedBookId(bk); setTimeout(() => setSelectedChunks(newSel), 150); }   // the book switch resets the chunk filter, so set it after
+                else setSelectedChunks(newSel);
                 triggerToast(studyDraft.mode === 'countdown' ? `Timer started — ${minutes} min to cover ${target} words. Open words in Home to study!` : 'Stopwatch started — open words in Home to study!');
             };
             const toggleStudyPause = () => setStudySession(p => (p ? { ...p, status: p.status === 'running' ? 'paused' : 'running' } : p));
@@ -8341,10 +8363,10 @@ Rules:
             );
             const renderStudyChip = () => {
                 if (!studySession) return (
-                    <button type="button" onClick={() => { setStudyDraft(d => ({ ...d, target: Math.max(1, Math.min(200, filteredWords.length || 20)) })); setShowStudySetup(true); }}
+                    <button type="button" onClick={() => { setStudyDraft(d => ({ ...d, bookId: activeBook.id, chunkIdx: selectedChunks.length === 1 ? selectedChunks[0] : (selectedChunks.length > 1 ? -2 : -1), target: Math.max(1, Math.min(500, filteredWords.length || 20)) })); setShowStudySetup(true); }}
                         className="h-9 px-3 rounded-full bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-300/40 text-white text-xs font-black flex items-center gap-1.5 shrink-0 transition-colors"
                         title="Start a study session with a timer — then take an exam on what you covered" aria-label="Start a study session">
-                        {timerSvg}<span>Study</span><span className="hidden lg:inline text-[10px] font-bold opacity-70">timer</span>
+                        {timerSvg}<span>Study</span>
                     </button>
                 );
                 return <StudyChip session={studySession} liveRef={studyLiveRef} onToggle={toggleStudyPause} onFinish={finishStudySession} />;
@@ -8359,7 +8381,7 @@ Rules:
             );
 
             return (
-                <div className={`min-h-screen ${shellLayout === 'menu' ? 'md:pl-60' : ''}`}>
+                <div className={`min-h-screen pb-16 md:pb-0 ${shellLayout === 'menu' ? 'md:pl-60' : ''}`}>
                     {/* TOP BAR — both layouts. Full width on PC (it spans over the side menu); on phones it
                         slides up out of the way when you scroll down and returns when you scroll up. */}
                     <div className={`sticky top-0 z-40 h-14 bg-indigo-950 text-white px-3 sm:px-5 flex items-center gap-3 shadow-md transition-transform duration-300 ease-out ${shellLayout === 'menu' ? 'md:-ml-60' : ''} ${barHidden && !showNotifPanel && !showMsgPanel ? '-translate-y-full md:translate-y-0' : 'translate-y-0'}`}>
@@ -8369,6 +8391,21 @@ Rules:
                         <div className="flex-1 min-w-0 text-base sm:text-lg font-black tracking-wide truncate">Vocab Companion</div>
                         {renderHeaderActions()}
                     </div>
+                    {/* BOTTOM TAB BAR — phones only (like Facebook). Slides away while you scroll down, back when you scroll up. */}
+                    <nav className={`md:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 shadow-[0_-4px_14px_rgba(15,23,42,0.08)] transition-transform duration-300 ease-out ${barHidden ? 'translate-y-full' : 'translate-y-0'}`} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+                        <div className="flex items-stretch">
+                            {APP_NAV_TABS.map((t) => {
+                                const on = activeTab === t.id;
+                                return (
+                                    <button key={t.id} type="button" onClick={() => setActiveTab(t.id)} aria-label={t.label}
+                                        className={`flex-1 min-w-0 pt-1.5 pb-1.5 flex flex-col items-center gap-0.5 border-t-2 transition-colors ${on ? 'text-indigo-600 border-indigo-600' : 'text-slate-400 border-transparent'}`}>
+                                        {t.icon('w-[22px] h-[22px]')}
+                                        <span className="text-[9px] font-bold leading-none truncate max-w-full px-0.5">{t.short}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </nav>
                     {shellLayout === 'menu' && (
                         <>
                             <aside className="hidden md:flex fixed left-0 top-14 bottom-0 w-60 z-30 flex-col bg-white border-r border-slate-200 shadow-sm p-4 gap-4">
@@ -8408,7 +8445,7 @@ Rules:
                         <div className="fixed inset-0 z-[70] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowStudySetup(false)}>
                             <div className="bg-white text-slate-800 rounded-2xl p-5 w-full max-w-md shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
                                 <div>
-                                    <h3 className="text-lg font-black flex items-center gap-2">⏱ Memorize timer</h3>
+                                    <h3 className="text-lg font-black flex items-center gap-2">⏱ Study</h3>
                                     <p className="text-xs text-slate-500 mt-0.5">Pick a goal, study the words in Home, then test yourself on what you covered. Your pace per word goes to Stats.</p>
                                 </div>
                                 <div className="grid grid-cols-2 gap-2">
@@ -8430,13 +8467,26 @@ Rules:
                                         </div>
                                     </div>
                                 )}
+                                <div className="grid grid-cols-2 gap-2">
+                                    <label className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">Book
+                                        <select value={studyDraft.bookId || activeBook.id} onChange={(e) => studyPickBook(e.target.value)} className="mt-1 w-full px-2 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 normal-case tracking-normal bg-white">
+                                            {books.map(b => <option key={b.id} value={b.id}>{b.name} ({(allWords[b.id] || []).length})</option>)}
+                                        </select>
+                                    </label>
+                                    <label className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">Chunk
+                                        <select value={studyDraft.chunkIdx === undefined ? -1 : studyDraft.chunkIdx} onChange={(e) => studyPickChunk(e.target.value)} className="mt-1 w-full px-2 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 normal-case tracking-normal bg-white">
+                                            <option value={-1}>All words</option>
+                                            {selectedChunks.length > 1 && (studyDraft.bookId || activeBook.id) === activeBook.id && <option value={-2}>Current selection ({selectedChunks.length} chunks)</option>}
+                                            {mpChunkList(allWords[studyDraft.bookId || activeBook.id] || [], chunkSize).map(c => <option key={c.index} value={c.index}>{c.label} · {c.words.length} words</option>)}
+                                        </select>
+                                    </label>
+                                </div>
                                 <div>
                                     <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-1.5">Words to cover</div>
                                     <div className="flex flex-wrap items-center gap-1.5">
                                         <input type="number" min="1" max="500" value={studyDraft.target} onChange={(e) => setStudyDraft(d => ({ ...d, target: e.target.value }))} className="w-20 px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-bold" aria-label="Target words" />
-                                        <button type="button" onClick={() => setStudyDraft(d => ({ ...d, target: Math.max(1, Math.min(500, filteredWords.length || 20)) }))} className="px-3 py-1.5 rounded-full text-xs font-bold border border-slate-300 hover:bg-slate-100">Whole current list ({filteredWords.length})</button>
+                                        <span className="text-[11px] text-slate-400">Set automatically from the chunk — change it if you like. The Home list switches to this book and chunk when you start.</span>
                                     </div>
-                                    <p className="text-[11px] text-slate-400 mt-1.5">Studying: <b className="text-slate-600">{selectedChunks.length === 0 ? 'All words' : selectedChunks.map(i => (chunksList[i] ? chunksList[i].label : '')).filter(Boolean).join(' + ')}</b> — pick a chunk in the Chunk filter first if you want one.</p>
                                 </div>
                                 {studyDraft.mode === 'countdown' && Number(studyDraft.target) > 0 && (
                                     <div className="rounded-xl bg-indigo-50 border border-indigo-100 px-3 py-2 text-xs font-semibold text-indigo-700">
@@ -9605,13 +9655,13 @@ Rules:
                                     <button
                                         key={tab.id}
                                         onClick={() => setActiveTab(tab.id)}
-                                        className={`shrink-0 sm:flex-1 min-w-[7.25rem] py-2 sm:py-2.5 px-2.5 sm:px-3 rounded-xl text-[11px] sm:text-xs font-bold transition-all duration-200 flex flex-col items-center justify-center ${
+                                        className={`shrink-0 sm:flex-1 min-w-[7.25rem] py-2 sm:py-2.5 px-2.5 sm:px-3 rounded-xl text-[11px] sm:text-xs font-bold transition-all duration-200 flex items-center justify-center gap-1.5 justify-center ${
                                             activeTab === tab.id
                                                 ? 'keep-white bg-white text-indigo-900 shadow-lg scale-[1.02]'
                                                 : 'bg-indigo-950/40 text-indigo-100 hover:bg-indigo-800/60 border border-indigo-400/20'
                                         }`}
                                     >
-                                        <span>{tab.label}</span>
+                                        {tab.icon('w-4 h-4 shrink-0')}<span>{tab.label}</span>
                                     </button>
                                 ))}
                             </div>
@@ -9630,7 +9680,7 @@ Rules:
                         <div className="bg-white p-2.5 sm:p-4 rounded-2xl border border-slate-200 shadow-sm mb-4 sm:mb-6 flex flex-col md:flex-row items-center justify-between gap-2 sm:gap-4">
                             <div className="grid grid-cols-3 gap-1.5 w-full md:flex md:flex-wrap md:items-center md:gap-2 md:w-auto">
                                 <div className="flex items-center gap-1.5 md:gap-2 font-bold text-xs text-slate-500 whitespace-nowrap min-w-0">
-                                    <span className="shrink-0">⭕<span className="hidden md:inline"> CHUNK:</span></span>
+                                    <span className="shrink-0 flex items-center gap-1"><svg className="w-4 h-4 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg><span className="hidden md:inline">CHUNK:</span></span>
                                     <BarSelect
                                         title="Tick one or more chunks. Bar: green = familiar, yellow = semi-familiar, blank = not learned yet"
                                         values={selectedChunks}
