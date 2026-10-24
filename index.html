@@ -667,7 +667,7 @@
 
             const getVoicePrefs = () => ({ ...voicePrefs });
 
-            const speakText = (text, accent = 'us', notify, options = {}) => {
+            const speakText = (text, accent = 'uk', notify, options = {}) => {
                 if (!text || !String(text).trim()) return;
                 if (!('speechSynthesis' in window)) {
                     if (notify) notify("Speech synthesis is not supported in this browser.");
@@ -766,7 +766,7 @@
             );
         };
 
-        const SpeakPair = ({ text, notify, accent = 'us', variant = 'default', className = '', isSentence = false, primaryAudioBtn = false, boxed = true }) => {
+        const SpeakPair = ({ text, notify, accent = 'uk', variant = 'default', className = '', isSentence = false, primaryAudioBtn = false, boxed = true }) => {
             if (!text || !String(text).trim()) return null;
             const opts = { isSentence: isSentence || String(text).length > 40 };
             return (
@@ -1018,6 +1018,31 @@
             );
         };
 
+        // Context + Example block shared by EVERY family card (Home, Multiplayer, Games, Quiz, Flashcards...).
+        // Light, see-through panel with a coloured edge and small labels so each line is easy to find and read.
+        const ContextExampleBox = ({ context, example, notify, accent, className = '' }) => {
+            if (!context && !example) return null;
+            // Every line of a word (word / Bangla / English / context / example) is spaced the same (gap-1, 1.4 line height).
+            // The two highlighted lines have no extra vertical padding, so their height matches each other and the gaps
+            // between all five lines look identical. The speaker keeps its normal rounded hover tile; negative margins stop
+            // it from making the example line taller.
+            return (
+                <div className={`mt-1 space-y-1 text-left ${className}`}>
+                    {context && (
+                        <div className="flex items-center gap-2 border-l-[3px] border-indigo-500 bg-slate-500/[0.07] rounded-r-md pl-2.5 pr-2">
+                            <p className="min-w-0 text-[13px] leading-[1.4] font-medium text-slate-800">{context}</p>
+                        </div>
+                    )}
+                    {example && (
+                        <div className="flex items-center gap-2 border-l-[3px] border-emerald-500 bg-slate-500/[0.07] rounded-r-md pl-2.5 pr-1">
+                            <p className="flex-1 min-w-0 text-[13px] leading-[1.4] font-medium text-slate-800">“{example}”</p>
+                            <SpeakPair text={example} notify={notify} accent={accent} isSentence boxed={false} className="shrink-0 -my-[7px]" />
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
         const RelatedWordBlock = ({ entry, tone, accent, notify, show = { phonetics: true, meaning_bn: true, meaning_en: true, context: true, example: true, note: true }, famLevel = 'unfamiliar', onSetFamiliarity = null, cornerAction = null, boxPadding = 'p-5' }) => {
             const ts = RELATED_TONE_STYLES[tone] || RELATED_TONE_STYLES.syn;
             return (
@@ -1026,19 +1051,19 @@
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center flex-wrap gap-2">
                             <span className={`text-base font-bold leading-snug ${ts.title}`}>{entry.word}</span>
-                            <SpeakPair text={entry.word} notify={notify} accent={accent} boxed={false} />
+                            <SpeakPair text={entry.word} notify={notify} accent={accent} boxed={false} className="-my-1.5" />
                             {show.phonetics && entry.phonetics && (
                                 <span className="text-[11px] font-mono text-indigo-600">
                                     [{entry.phonetics}]
                                 </span>
                             )}
                         </div>
-                        <div className="mt-0.5 space-y-0.5">
+                        <div className="mt-1 space-y-1">
                             {show.meaning_bn && entry.meaning_bn && (
-                                <p className={`text-xs leading-snug font-semibold ${ts.meaning}`}>{entry.meaning_bn}</p>
+                                <p className={`text-[13px] leading-[1.4] font-semibold ${ts.meaning}`}>{entry.meaning_bn}</p>
                             )}
                             {show.meaning_en && entry.meaning_en && (
-                                <p className="text-xs leading-snug font-medium text-slate-500">{entry.meaning_en}</p>
+                                <p className="text-[13px] leading-[1.4] font-medium text-slate-800">{entry.meaning_en}</p>
                             )}
                         </div>
                     </div>
@@ -1049,23 +1074,11 @@
                         </div>
                     )}
                 </div>
-                {((show.context && entry.context) || (show.example && entry.sentence)) && (
-                    <div className="mt-0.5 text-xs">
-                        <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 sentence-example space-y-0.5">
-                            {show.context && entry.context && <p className="text-xs leading-snug text-slate-600">{entry.context}</p>}
-                            {show.example && entry.sentence && (
-                                <div className="flex items-center justify-between gap-2">
-                                    <p className="flex-1 min-w-0 text-xs leading-snug italic text-slate-500">"{entry.sentence}"</p>
-                                    <SpeakPair text={entry.sentence} notify={notify} accent={accent} isSentence className="shrink-0" />
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                )}
+                <ContextExampleBox context={show.context ? entry.context : ''} example={show.example ? entry.sentence : ''} notify={notify} accent={accent} />
                 {show.note && entry.note && (
                     <div className="mt-0.5 bg-amber-50 border border-amber-100 rounded-xl p-2.5 text-left">
                         <span className="text-[11px] font-bold text-amber-600 uppercase tracking-wider block mb-0.5">Note</span>
-                        <p className="text-xs text-slate-600 italic whitespace-pre-line">{renderNoteRich(entry.note)}</p>
+                        <p className="text-[13px] leading-relaxed text-slate-700 italic whitespace-pre-line">{renderNoteRich(entry.note)}</p>
                     </div>
                 )}
             </div>
@@ -1090,7 +1103,7 @@
         // The single "full word" card layout — used both by the Word List (as a
         // controlled, grid-aware card) and by Games/Practice Quiz (as a standalone
         // read-only reveal). expanded/onToggleExpand are always controlled by the caller.
-        const WordCardShell = ({ item, accent = 'us', notify, showBangla = true, expanded, onToggleExpand, actions = null, editDeleteActions = null, titleExtra = null, cardClassName = 'border-slate-200 bg-white', fieldVisibility = DEFAULT_FIELD_VISIBILITY, relatedFamiliarityMap = null, onSetRelatedFamiliarity = null, detailMode = false }) => {
+        const WordCardShell = ({ item, accent = 'uk', notify, showBangla = true, expanded, onToggleExpand, actions = null, editDeleteActions = null, titleExtra = null, cardClassName = 'border-slate-200 bg-white', fieldVisibility = DEFAULT_FIELD_VISIBILITY, relatedFamiliarityMap = null, onSetRelatedFamiliarity = null, detailMode = false, fillHeight = false }) => {
             const [rightPanelScrolled, setRightPanelScrolled] = useState(false);
             if (!item) return null;
             const fv = fieldVisibility || DEFAULT_FIELD_VISIBILITY;
@@ -1106,7 +1119,7 @@
 
             return (
                 <div className={detailMode
-                    ? `rounded-2xl border shadow-sm transition-all text-left flex flex-col overflow-hidden max-h-[40rem] lg:max-h-[87.5vh] ${cardClassName}`
+                    ? `rounded-2xl border shadow-sm transition-all text-left flex flex-col overflow-hidden ${fillHeight ? 'h-full max-h-full' : 'max-h-[40rem] lg:max-h-[87.5vh]'} ${cardClassName}`
                     : `rounded-2xl border shadow-sm hover:shadow-md transition-all text-left p-5 ${cardClassName}`
                 }>
                     {detailMode ? (
@@ -1188,7 +1201,7 @@
                                 <div className="flex-1 min-w-0">
                                     <div className="flex items-center flex-wrap gap-2">
                                         <h3 className="text-base font-bold text-slate-900 leading-snug">{item.word}</h3>
-                                        <SpeakPair text={item.word} notify={notify} accent={accent} boxed={false} />
+                                        <SpeakPair text={item.word} notify={notify} accent={accent} boxed={false} className="-my-1.5" />
                                         {fv.phonetics && item.phonetics && (
                                             <span className="text-[11px] font-mono text-indigo-600">
                                                 [{item.phonetics}]
@@ -1196,12 +1209,12 @@
                                         )}
                                         {titleExtra}
                                     </div>
-                                    <div className="mt-0.5 space-y-0.5">
+                                    <div className="mt-1 space-y-1">
                                         {fv.meaning_bn && showBangla && banglaText && (
-                                            <p className="text-xs leading-snug font-semibold text-emerald-700">{banglaText}</p>
+                                            <p className="text-[13px] leading-[1.4] font-semibold text-emerald-700">{banglaText}</p>
                                         )}
                                         {fv.meaning_en && (
-                                            <p className="text-xs leading-snug font-medium text-slate-500">{meaningText}</p>
+                                            <p className="text-[13px] leading-[1.4] font-medium text-slate-800">{meaningText}</p>
                                         )}
                                     </div>
                                 </div>
@@ -1211,19 +1224,7 @@
                                 </div>
                             </div>
 
-                            <div className="mt-0.5 text-xs">
-                                {((fv.context_main && item.context_main) || (fv.example_main && exampleText)) && (
-                                    <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 sentence-example space-y-0.5">
-                                        {fv.context_main && item.context_main && <p className="text-xs leading-snug text-slate-600">{item.context_main}</p>}
-                                        {fv.example_main && exampleText && (
-                                            <div className="flex items-center justify-between gap-2">
-                                                <p className="flex-1 min-w-0 text-xs leading-snug italic text-slate-500">"{exampleText}"</p>
-                                                <SpeakPair text={exampleText} notify={notify} accent={accent} isSentence className="shrink-0" />
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
+                            <ContextExampleBox context={fv.context_main ? item.context_main : ''} example={fv.example_main ? exampleText : ''} notify={notify} accent={accent} />
                         </React.Fragment>
                     ) : hasExpandable ? null : (
                         <div className="flex items-center justify-end gap-2">
@@ -1313,7 +1314,7 @@
 
         // Read-only wrapper around WordCardShell — manages its own expand state since
         // Games/Practice Quiz only ever show one card at a time (no "max 2" grid rule needed).
-        const FullWordCard = ({ item, accent = 'us', notify, showBangla = true, fieldVisibility = DEFAULT_FIELD_VISIBILITY }) => {
+        const FullWordCard = ({ item, accent = 'uk', notify, showBangla = true, fieldVisibility = DEFAULT_FIELD_VISIBILITY }) => {
             const [expanded, setExpanded] = useState(false);
             return (
                 <WordCardShell
@@ -1332,7 +1333,7 @@
         // used as the "level 2" reveal in Games/Practice Quiz — no outer card, no
         // repeated header, since the specific word already shown at level 1 (see
         // WordRevealContent) shouldn't be shown a second time here.
-        const FamilyList = ({ item, includeMainWord = true, accent = 'us', notify, showBangla = true, fieldVisibility = DEFAULT_FIELD_VISIBILITY, famMap = null, onSetFamiliarity = null }) => {
+        const FamilyList = ({ item, includeMainWord = true, accent = 'uk', notify, showBangla = true, fieldVisibility = DEFAULT_FIELD_VISIBILITY, famMap = null, onSetFamiliarity = null }) => {
             if (!item) return null;
             const fv = fieldVisibility || DEFAULT_FIELD_VISIBILITY;
             const synonyms = fv.synonyms ? (item.synonyms || []) : [];
@@ -2104,12 +2105,15 @@
             // for unrelated reasons) so the badges never show a stale number.
             useEffect(() => { paintSpeedTimer(speedTimeLeftRef.current); });
 
+            const speedPausedRef = useRef(false);
+            speedPausedRef.current = revealWord;      // reading the word details pauses the round clock
             useEffect(() => {
                 if (gameMode !== 'speed' || gameState !== 'playing' || !speedTimerActive) return;
                 speedTimeLeftRef.current = speedTotalRef.current || 60;
                 setSpeedTimeLeft(speedTotalRef.current || 60);
                 paintSpeedTimer(speedTotalRef.current || 60);
                 speedTimerRef.current = setInterval(() => {
+                    if (speedPausedRef.current) return;
                     const next = speedTimeLeftRef.current <= 1 ? 0 : speedTimeLeftRef.current - 1;
                     speedTimeLeftRef.current = next;
                     paintSpeedTimer(next);
@@ -3603,6 +3607,7 @@
                 syn,
                 ant,
                 parentKey: parent.key,
+                famId: (parent.full && parent.full.id != null) ? getRelatedEntryId(parent.full.id, role, i, rel) : null,
             };
         }
 
@@ -3629,7 +3634,7 @@
 
         // Filled in by MultiplayerArena on every render, so the picker/study screens can draw the
         // SAME word card the Home (Word List) screen uses — with the user's own display settings.
-        const MP_VIEW_CTX = { fieldVisibility: null, showBangla: true, accent: 'us', notify: null, localIndex: new Map(), famMap: null, setFamiliarity: null, onEdit: null, onDelete: null, examInclude: { synonyms: true, antonyms: true } };
+        const MP_VIEW_CTX = { fieldVisibility: null, showBangla: true, accent: 'uk', notify: null, localIndex: new Map(), famMap: null, setFamiliarity: null, onEdit: null, onDelete: null, examInclude: { synonyms: true, antonyms: true } };
         // Slim (room/chunk) word row -> the item shape WordCardShell expects.
         function mpSlimItemFromRow(r) {
             const asEntries = (list) => (list || []).map((x) => (typeof x === 'string' ? { word: x } : x)).filter((x) => x && x.word);
@@ -3732,6 +3737,7 @@
                         showBangla={ctx.showBangla}
                         fieldVisibility={ctx.fieldVisibility || DEFAULT_FIELD_VISIBILITY}
                         editDeleteActions={editDelete}
+                        fillHeight
                         relatedFamiliarityMap={own ? ctx.famMap : null}
                         onSetRelatedFamiliarity={own ? ctx.setFamiliarity : null}
                     />
@@ -3746,6 +3752,12 @@
                         <button type="button" onClick={() => setSelectedKey(row.key)} className="flex-1 min-w-0 text-left">
                             <span className={`text-sm font-bold truncate block ${nested ? 'text-xs font-semibold' : ''} ${tone}`}>{row.w}</span>
                         </button>
+                        {(() => {
+                            const fid = (row.role === 'syn' || row.role === 'ant') ? row.famId : (row.full ? row.full.id : null);
+                            if (fid == null || !MP_VIEW_CTX.famMap) return null;
+                            const lv = getWordFamiliarityLevel(MP_VIEW_CTX.famMap, fid);
+                            return <span title={lv === 'familiar' ? 'Familiar' : lv === 'semi' ? 'Semi-familiar' : 'New'} className={`w-2.5 h-2.5 rounded-full shrink-0 ${lv === 'familiar' ? 'bg-emerald-500' : lv === 'semi' ? 'bg-amber-400' : 'bg-slate-300'}`} />;
+                        })()}
                         {pickable && (!nested || MP_VIEW_CTX.examInclude[row.role === 'ant' ? 'antonyms' : 'synonyms']) && (
                             <button type="button" title={on ? 'Unpick' : 'Pick for the test'} onClick={() => toggle(row)}
                                 disabled={locked || (!on && picks.length >= wordCount)}
@@ -3769,7 +3781,7 @@
                     </div>
                     <div className="flex flex-col lg:flex-row gap-3 items-stretch">
                         {/* LEFT — same idea as Word List: compact family list */}
-                        <div className="w-full lg:w-[34%] shrink-0 max-h-[40rem] overflow-hidden rounded-2xl border border-slate-200 bg-white flex flex-col">
+                        <div className="w-full lg:w-[34%] shrink-0 h-[30rem] lg:h-[min(46rem,86vh)] overflow-hidden rounded-2xl border border-slate-200 bg-white flex flex-col">
                             <div className="shrink-0 h-10 flex items-center justify-between px-3 border-b border-slate-100">
                                 <span className="text-[11px] font-bold text-indigo-600 uppercase tracking-wider">Word</span>
                                 {pickable && <span className="text-[10px] font-bold text-slate-400">tap ✓ to pick</span>}
@@ -3789,9 +3801,10 @@
                             </div>
                         </div>
                         {/* RIGHT — detail + gallery swipe (memorize / prepare) */}
-                        <div className="flex-1 min-w-0">
+                        <div className="flex-1 min-w-0 h-[30rem] lg:h-[min(46rem,86vh)]">
                             {filteredFlat.length > 0 ? (
                                 <SwipeDeck
+                                    className="h-full"
                                     label={`${Math.max(1, selIdx + 1)} / ${filteredFlat.length}`}
                                     prev={prevRow ? { node: detailCard(prevRow) } : null}
                                     next={nextRow ? { node: detailCard(nextRow) } : null}
@@ -4424,7 +4437,7 @@
             );
         }
 
-        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast, chunkSize = 25, openChatWith, onOpenedChat, fieldVisibility = null, showBangla = true, accent = 'us', homeCtx = null, examInclude = { synonyms: true, antonyms: true }, onPracticeWords = null }) {
+        function MultiplayerArena({ cloudUser, cloudAuthReady, onSignIn, nickname, books, allWords, activeBookId, triggerToast, chunkSize = 25, openChatWith, onOpenedChat, fieldVisibility = null, showBangla = true, accent = 'uk', homeCtx = null, examInclude = { synonyms: true, antonyms: true }, onPracticeWords = null }) {
             // Every word the player owns, by lower-case spelling — lets room/chunk words (which are shared in a slim
             // form) be shown with their full details when the player has the same word in their own books.
             const mpLocalIndex = useMemo(() => {
@@ -5196,7 +5209,7 @@
         // suppressed only while an intentional horizontal drag is in progress.
         // After the slide finishes, the parent commits the new index and the
         // track snaps back to centre with no animation.
-        function SwipeDeck({ prev, cur, next, onPrev, onNext, label }) {
+        function SwipeDeck({ prev, cur, next, onPrev, onNext, label, className = '' }) {
             const wrapRef = useRef(null);
             const trackRef = useRef(null);
             const g = useRef({ down: false, axis: null, x0: 0, y0: 0, t0: 0, dx: 0, busy: false, pid: null });
@@ -5269,12 +5282,27 @@
             };
 
             const pane = (node, key) => (
-                <div key={key} className="w-1/3 shrink-0 min-w-0 px-0.5">{node}</div>
+                <div key={key} className="w-1/3 shrink-0 min-w-0 px-0.5 h-full">{node}</div>
             );
 
             return (
-                <div>
-                    <div className="flex items-center justify-between gap-2 mb-2">
+                <div className={`flex flex-col ${className}`}>
+                    <div
+                        ref={wrapRef}
+                        className="swipe-deck-wrap flex-1 min-h-0 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+                        style={{ touchAction: 'pan-y' }}
+                        onPointerDown={onPointerDown}
+                        onPointerMove={onPointerMove}
+                        onPointerUp={endDrag}
+                        onPointerCancel={endDrag}
+                    >
+                        <div ref={trackRef} className="flex items-stretch h-full" style={{ width: '300%', transform: 'translateX(-33.3333%)', willChange: 'transform' }}>
+                            {pane(prev ? prev.node : null, 'p')}
+                            {pane(cur, 'c')}
+                            {pane(next ? next.node : null, 'n')}
+                        </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 mt-2 shrink-0">
                         <button type="button" onClick={() => slideTo(-1)} disabled={!hasPrev}
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${hasPrev ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}>
                             ‹ Prev
@@ -5284,21 +5312,6 @@
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${hasNext ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}>
                             Next ›
                         </button>
-                    </div>
-                    <div
-                        ref={wrapRef}
-                        className="swipe-deck-wrap overflow-hidden cursor-grab active:cursor-grabbing select-none"
-                        style={{ touchAction: 'pan-y' }}
-                        onPointerDown={onPointerDown}
-                        onPointerMove={onPointerMove}
-                        onPointerUp={endDrag}
-                        onPointerCancel={endDrag}
-                    >
-                        <div ref={trackRef} className="flex items-start" style={{ width: '300%', transform: 'translateX(-33.3333%)', willChange: 'transform' }}>
-                            {pane(prev ? prev.node : null, 'p')}
-                            {pane(cur, 'c')}
-                            {pane(next ? next.node : null, 'n')}
-                        </div>
                     </div>
                 </div>
             );
@@ -5952,8 +5965,8 @@
             const [currentPage, setCurrentPage] = useState(1);
 
             // GLOBAL PRONUNCIATION ACCENT (replaces the old per-card US/UK button pair)
-            const [speechAccent, setSpeechAccent] = useState(() => localStorage.getItem('wordsmart_speech_accent') || 'us');
-            useEffect(() => { localStorage.setItem('wordsmart_speech_accent', speechAccent); }, [speechAccent]);
+            const [speechAccent, setSpeechAccent] = useState(() => localStorage.getItem('wordsmart_speech_accent_v2') || 'uk');
+            useEffect(() => { localStorage.setItem('wordsmart_speech_accent_v2', speechAccent); }, [speechAccent]);
 
             // FIELD VISIBILITY — controls which fields show on every word card, everywhere
             // (Word List, Flashcards, Games, Practice Quiz). "word" itself is never toggleable.
@@ -7742,12 +7755,16 @@ Rules:
                 // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [quizTimeLeft]);
 
+            // The word-details drop-down (after you submit) pauses the clock until it is closed again
+            const quizPausedRef = useRef(false);
+            quizPausedRef.current = !!(quizAnswers[quizQuestionIndex] && quizAnswers[quizQuestionIndex].submitted && revealWord);
             // Overall quiz countdown (only in 'overall' timer mode) — one timer for the whole quiz session
             useEffect(() => {
                 if (quizPhase !== 'playing' || !quizQuestions.length) return;
                 if (quizTimerMode !== 'overall' || quizOverallTimeLeft === null) return;
                 if (quizOverallTimeLeft <= 0) return;
                 const interval = setInterval(() => {
+                    if (quizPausedRef.current) return;
                     setQuizOverallTimeLeft(prev => {
                         if (prev === null) return null;
                         if (prev <= 1) { clearInterval(interval); return 0; }
@@ -7992,6 +8009,7 @@ Rules:
                         relatedFamiliarityMap={showActions ? currentFamiliarityMap : null}
                         onSetRelatedFamiliarity={showActions ? setWordFamiliarity : null}
                         detailMode={detailMode}
+                        fillHeight={detailMode}
                     />
                 );
             };
@@ -8228,6 +8246,26 @@ Rules:
                 return () => { window.removeEventListener('scroll', onScroll); window.removeEventListener('resize', onResize); cancelAnimationFrame(raf); clearTimeout(idleT); };
             }, []);
             useEffect(() => { if (barLockRef.current && barApiRef.current) barApiRef.current.reset(); }, [showNotifPanel, showMsgPanel, menuOpen]);
+
+            // PHONE: after tapping a tab, glide down past the big header so the tab's content is on screen.
+            // Each tab can be switched on/off in Word Manager.
+            const [autoScrollTabs, setAutoScrollTabs] = useState(() => {
+                const all = { list: true, flashcards: true, quiz: true, game: true, multi: true, stats: true, manage: true };
+                try { return { ...all, ...(JSON.parse(localStorage.getItem('wordsmart_autoscroll_tabs_v1') || 'null') || {}) }; } catch (e) { return all; }
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_autoscroll_tabs_v1', JSON.stringify(autoScrollTabs)); } catch (e) {} }, [autoScrollTabs]);
+            const autoScrollFirstRef = useRef(true);
+            useEffect(() => {
+                if (autoScrollFirstRef.current) { autoScrollFirstRef.current = false; return; }
+                if (!window.matchMedia('(max-width: 767px)').matches || !autoScrollTabs[activeTab]) return;
+                const t = setTimeout(() => {
+                    const el = document.getElementById('tab-content-anchor');
+                    if (!el) return;
+                    window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - 8), behavior: 'smooth' });
+                }, 90);
+                return () => clearTimeout(t);
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [activeTab]);
 
             // ===== TOP-BAR ACTIONS: 🔔 notifications · 💬 messages · profile circle =====
             // Used in the top bar of both layouts (phone + PC).
@@ -9615,37 +9653,37 @@ Rules:
                                     <h1 className={`font-extrabold tracking-tight ${shellLayout === 'menu' ? 'text-lg sm:text-xl' : 'text-lg sm:text-2xl'}`}>
                                         <span>{activeBook.name} Companion</span>
                                     </h1>
-                                    <p className="text-indigo-200/80 text-[11px] sm:text-sm font-medium mt-0.5 sm:mt-1 line-clamp-2">
+                                    <p className="hidden sm:block text-indigo-200/80 text-[11px] sm:text-sm font-medium mt-0.5 sm:mt-1 line-clamp-2">
                                         Welcome{(typeof displayName === 'string' && displayName && displayName !== 'Guest') ? ', ' + displayName.split(' ')[0] : ''} — keep your streak alive.
                                     </p>
                                 </div>
                             </div>
 
                             {/* TODAY'S GOAL + FAMILIARITY — compact, side by side */}
-                            <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
-                                <div className="bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-400/30 rounded-xl px-3 py-2 backdrop-blur-md sm:min-w-[210px]">
-                                    <div className="flex items-center justify-between gap-2 text-xs font-semibold mb-1">
+                            <div className="grid grid-cols-2 sm:flex sm:flex-row gap-1.5 sm:gap-2 w-full md:w-auto">
+                                <div className="bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-400/30 rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 backdrop-blur-md sm:min-w-[210px]">
+                                    <div className="flex items-center justify-between gap-2 text-[11px] sm:text-xs font-semibold mb-0.5 sm:mb-1">
                                         <button type="button" onClick={() => setActiveTab('stats')} title="Open Stats & Streak" className="flex-1 flex items-center justify-between gap-2 text-left">
                                             <span>🎯 Today's goal</span>
                                             <span className="font-black text-amber-300">{todaysActivity.learned}/{dailyGoal}</span>
                                         </button>
                                         <button type="button" onClick={openDailyGoalSettings} title="Change daily goal" className="w-5 h-5 shrink-0 rounded-md bg-white/10 hover:bg-white/25 text-[11px] leading-none flex items-center justify-center">⚙</button>
                                     </div>
-                                    <div className="w-full bg-slate-950/40 rounded-full h-2.5 overflow-hidden border border-amber-400/20">
+                                    <div className="w-full bg-slate-950/40 rounded-full h-1.5 sm:h-2.5 overflow-hidden border border-amber-400/20">
                                         <div className={`h-full transition-all duration-500 ${todaysActivity.learned >= dailyGoal ? 'bg-emerald-400' : 'bg-amber-400'}`} style={{ width: `${Math.min(100, (todaysActivity.learned / dailyGoal) * 100)}%` }} />
                                     </div>
-                                    <div className="flex justify-between text-[10px] text-amber-100/80 mt-1">
+                                    <div className="hidden sm:flex justify-between text-[10px] text-amber-100/80 mt-1">
                                         <span>{todaysActivity.learned >= dailyGoal ? '🎉 Goal reached!' : `${dailyGoal - todaysActivity.learned} more to go`}</span>
                                         <span>🔥 {currentStreak}-day streak</span>
                                     </div>
                                 </div>
 
-                                <div className="bg-white/10 backdrop-blur-md rounded-xl px-3 py-2 border border-white/20 sm:min-w-[210px]">
-                                    <div className="flex justify-between text-xs font-semibold mb-1">
+                                <div className="bg-white/10 backdrop-blur-md rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 border border-white/20 sm:min-w-[210px]">
+                                    <div className="flex justify-between text-[11px] sm:text-xs font-semibold mb-0.5 sm:mb-1">
                                         <span>Familiarity</span>
                                         <span>{currentWords.length > 0 ? Math.round((familiarityCounts.familiar / currentWords.length) * 100) : 0}% familiar</span>
                                     </div>
-                                    <div className="w-full bg-slate-950/40 rounded-full h-2.5 overflow-hidden flex border border-indigo-400/20">
+                                    <div className="w-full bg-slate-950/40 rounded-full h-1.5 sm:h-2.5 overflow-hidden flex border border-indigo-400/20">
                                         {currentWords.length > 0 ? (
                                             <>
                                                 <div className="h-full bg-slate-400 transition-all duration-500" style={{ width: `${(familiarityCounts.unfamiliar / currentWords.length) * 100}%` }} title="Unfamiliar" />
@@ -9656,7 +9694,7 @@ Rules:
                                             <div className="h-full w-full bg-slate-600/50" />
                                         )}
                                     </div>
-                                    <div className="flex justify-between text-[10px] text-indigo-200 mt-1 gap-1">
+                                    <div className="flex justify-between text-[10px] text-indigo-200 mt-0.5 sm:mt-1 gap-1">
                                         <button type="button" title="Show unfamiliar" onClick={() => setFilterFamiliarities(prev => prev.includes('unfamiliar') ? prev.filter(x => x !== 'unfamiliar') : [...prev, 'unfamiliar'])} className={`hover:text-white hover:no-underline no-underline transition-colors ${filterFamiliarities.includes('unfamiliar')?'text-white font-bold':''}`}>○ {familiarityCounts.unfamiliar}</button>
                                         <button type="button" title="Show semi-familiar" onClick={() => setFilterFamiliarities(prev => prev.includes('semi') ? prev.filter(x => x !== 'semi') : [...prev, 'semi'])} className={`hover:text-white hover:no-underline no-underline transition-colors ${filterFamiliarities.includes('semi')?'text-amber-200 font-bold':''}`}>◐ {familiarityCounts.semi}</button>
                                         <button type="button" title="Show familiar" onClick={() => setFilterFamiliarities(prev => prev.includes('familiar') ? prev.filter(x => x !== 'familiar') : [...prev, 'familiar'])} className={`hover:text-white hover:no-underline no-underline transition-colors inline-flex items-center gap-0.5 ${filterFamiliarities.includes('familiar')?'text-emerald-200 font-bold':''}`}><span style={{fontSize:'16px',lineHeight:1,transform:'translateY(-2px)',display:'inline-block'}}>●</span> {familiarityCounts.familiar}</button>
@@ -9666,7 +9704,7 @@ Rules:
                         </div>
 
                         {/* NAVIGATION TABS + ACCOUNT — classic layout only (menu layout uses the side/hamburger nav) */}
-                        <div className={`flex flex-wrap items-center gap-3 pt-3 sm:pt-4 border-t border-indigo-500/30 ${shellLayout === 'menu' ? 'mt-3' : 'mt-4 sm:mt-6'}`}>
+                        <div className={`flex flex-wrap items-center gap-3 pt-3 sm:pt-4 border-t border-indigo-500/30 ${shellLayout === 'menu' ? 'hidden' : 'mt-4 sm:mt-6'}`}>
                             {shellLayout === 'classic' && (
                             <div className="flex gap-1.5 sm:gap-2 flex-1 min-w-0 overflow-x-auto pb-1 -mx-1 px-1">
                                 {APP_NAV_TABS.filter((t) => !t.menuOnly).map(tab => (
@@ -9684,14 +9722,10 @@ Rules:
                                 ))}
                             </div>
                             )}
-                            {shellLayout === 'menu' && (
-                                <div className="flex-1 min-w-0 text-[11px] sm:text-xs font-semibold text-indigo-100/80">
-                                    {APP_NAV_TABS.find((t) => t.id === activeTab)?.label || 'Home'} · use the menu to switch sections
-                                </div>
-                            )}
 
                         </div>
                     </header>
+                    <div id="tab-content-anchor" />
 
                     {/* GLOBAL CHUNK SELECTOR & SHUFFLE BAR */}
                     {activeTab !== 'manage' && activeTab !== 'stats' && (
@@ -9767,36 +9801,22 @@ Rules:
                             <div className="flex items-center justify-between gap-1.5 w-full md:w-auto md:justify-end md:flex-wrap md:gap-2">
                                 {/* GLOBAL US/UK PRONUNCIATION TOGGLE — applies everywhere audio is played */}
                                 <div className="flex items-center gap-0.5 md:gap-1 bg-slate-50 border border-slate-200 rounded-xl p-0.5 md:p-1" title="Pronunciation accent used everywhere">
-                                    <button
-                                        onClick={() => setSpeechAccent('us')}
-                                        className={`flex items-center gap-1 md:gap-1.5 px-1.5 md:px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
-                                            speechAccent === 'us'
-                                                ? 'bg-blue-50 text-blue-600 border-blue-300 shadow-sm'
-                                                : 'text-slate-500 border-transparent hover:bg-slate-100'
-                                        }`}
-                                    >
-                                        <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5" aria-hidden="true">
-                                            <path d="M3 9v6h4l5 5V4L7 9H3z" />
-                                            <path d="M16.5 12c0-1.77-.77-3.29-2-4.34v8.68c1.23-1.05 2-2.57 2-4.34z" />
-                                            <path d="M14.5 4.53v1.06A6.986 6.986 0 0 1 18.5 12a6.986 6.986 0 0 1-4 6.41v1.06A7.977 7.977 0 0 0 20 12a7.977 7.977 0 0 0-5.5-7.47z" />
-                                        </svg>
-                                        US
-                                    </button>
-                                    <button
-                                        onClick={() => setSpeechAccent('uk')}
-                                        className={`flex items-center gap-1 md:gap-1.5 px-1.5 md:px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
-                                            speechAccent === 'uk'
-                                                ? 'bg-purple-50 text-purple-600 border-purple-300 shadow-sm'
-                                                : 'text-slate-500 border-transparent hover:bg-slate-100'
-                                        }`}
-                                    >
-                                        <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5" aria-hidden="true">
-                                            <path d="M3 9v6h4l5 5V4L7 9H3z" />
-                                            <path d="M16.5 12c0-1.77-.77-3.29-2-4.34v8.68c1.23-1.05 2-2.57 2-4.34z" />
-                                            <path d="M14.5 4.53v1.06A6.986 6.986 0 0 1 18.5 12a6.986 6.986 0 0 1-4 6.41v1.06A7.977 7.977 0 0 0 20 12a7.977 7.977 0 0 0-5.5-7.47z" />
-                                        </svg>
-                                        UK
-                                    </button>
+                                    {[['uk', 'UK', 'bg-purple-50 text-purple-600 border-purple-300'], ['us', 'US', 'bg-blue-50 text-blue-600 border-blue-300']].map(([k, label, on]) => (
+                                        <button
+                                            key={k}
+                                            onClick={() => setSpeechAccent(k)}
+                                            className={`flex items-center gap-1 md:gap-1.5 px-1.5 md:px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
+                                                speechAccent === k ? `${on} shadow-sm` : 'text-slate-500 border-transparent hover:bg-slate-100'
+                                            }`}
+                                        >
+                                            <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5" aria-hidden="true">
+                                                <path d="M3 9v6h4l5 5V4L7 9H3z" />
+                                                <path d="M16.5 12c0-1.77-.77-3.29-2-4.34v8.68c1.23-1.05 2-2.57 2-4.34z" />
+                                                <path d="M14.5 4.53v1.06A6.986 6.986 0 0 1 18.5 12a6.986 6.986 0 0 1-4 6.41v1.06A7.977 7.977 0 0 0 20 12a7.977 7.977 0 0 0-5.5-7.47z" />
+                                            </svg>
+                                            {label}
+                                        </button>
+                                    ))}
                                 </div>
 
                                 <button
@@ -9894,7 +9914,7 @@ Rules:
                                 </div>
 
                                 {/* LEFT: word names only */}
-                                <div className="word-list-pane-resizable w-full shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col max-h-[28rem] lg:max-h-[87.5vh]" style={listPaneWidth !== null ? { '--list-pane-w': `${listPaneWidth}px` } : undefined}>
+                                <div className="word-list-pane-resizable w-full shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[30rem] lg:h-[min(46rem,86vh)]" style={listPaneWidth !== null ? { '--list-pane-w': `${listPaneWidth}px` } : undefined}>
                                     <div className={`shrink-0 h-11 flex items-center px-4 border-b border-slate-100 transition-shadow ${leftPaneScrolled ? 'shadow-[0_2px_4px_-2px_rgba(0,0,0,0.08)]' : ''}`}>
                                         <span className="text-[11px] font-bold text-indigo-600 uppercase tracking-wider">Word</span>
                                     </div>
@@ -9956,7 +9976,7 @@ Rules:
                                 {/* RIGHT: full detail card for the selected word — capped at the
                                     same max height as the left pane, so it never grows past it;
                                     scroll only appears if the content actually needs more room. */}
-                                <div id="word-detail-panel" className="flex-1 min-w-0 w-full">
+                                <div id="word-detail-panel" className="flex-1 min-w-0 w-full h-[30rem] lg:h-[min(46rem,86vh)]">
                                     {(() => {
                                         const selectedItem = pagedWords.find(w => w.id === selectedWordId) || filteredWords.find(w => w.id === selectedWordId);
                                         if (!selectedItem) {
@@ -9981,6 +10001,7 @@ Rules:
                                         const cardFor = (w) => WordCard({ item: w, famLevel: getFamiliarity(w.id), detailMode: true });
                                         return (
                                             <SwipeDeck
+                                                className="h-full"
                                                 label={`${idx + 1} / ${filteredWords.length}`}
                                                 prev={prevItem ? { node: cardFor(prevItem) } : null}
                                                 next={nextItem ? { node: cardFor(nextItem) } : null}
@@ -10149,21 +10170,7 @@ Rules:
                                             </div>
                                             {/* Level 1 (always visible once flipped): phonetic (front) + bangla/English
                                                 meaning + context + example — just this one word, flashcard-style. */}
-                                            {((fieldVisibility.context_main && playablePool[cardIndex].context_main) || (fieldVisibility.example_main && (playablePool[cardIndex].example_main || playablePool[cardIndex].sentence))) && (
-                                                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 sentence-example flex items-center justify-between gap-2 text-left">
-                                                    <div className="flex-1 min-w-0 space-y-1">
-                                                        {fieldVisibility.context_main && playablePool[cardIndex].context_main && (
-                                                            <p className="text-xs text-slate-500">{playablePool[cardIndex].context_main}</p>
-                                                        )}
-                                                        {fieldVisibility.example_main && (playablePool[cardIndex].example_main || playablePool[cardIndex].sentence) && (
-                                                            <p className="text-slate-600 italic">"{playablePool[cardIndex].example_main || playablePool[cardIndex].sentence}"</p>
-                                                        )}
-                                                    </div>
-                                                    {fieldVisibility.example_main && (playablePool[cardIndex].example_main || playablePool[cardIndex].sentence) && (
-                                                        <SpeakPair text={playablePool[cardIndex].example_main || playablePool[cardIndex].sentence} notify={triggerToast} accent={speechAccent} isSentence className="shrink-0" />
-                                                    )}
-                                                </div>
-                                            )}
+                                            <ContextExampleBox context={fieldVisibility.context_main ? playablePool[cardIndex].context_main : ''} example={fieldVisibility.example_main ? (playablePool[cardIndex].example_main || playablePool[cardIndex].sentence) : ''} notify={triggerToast} accent={speechAccent} />
                                             {/* Level 2 (nested dropdown, top-right icon below): the rest of the
                                                 word family — synonyms/antonyms. If this card is itself showing
                                                 a synonym/antonym (flattened from its main word into the
@@ -11316,6 +11323,19 @@ Rules:
                                         ))}
                                         <span className="text-[11px] opacity-60 ml-1">{currentWords.length} words → {chunksList.length} chunk{chunksList.length === 1 ? '' : 's'}</span>
                                     </div>
+                                </div>
+                            </div>
+
+                            {/* PHONE AUTO-SCROLL */}
+                            <div className={`rounded-2xl border shadow-sm p-4 space-y-3 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
+                                <div>
+                                    <h2 className="text-lg font-extrabold flex items-center gap-2"><span>📱</span> Auto-scroll on phone</h2>
+                                    <p className="text-[11px] mt-0.5 opacity-70">When you tap a tab on your phone, the page glides past the top banner so the tab's content is right in front of you. Choose which tabs do it.</p>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                                    {APP_NAV_TABS.map(t => (
+                                        <ToggleRow key={t.id} label={t.label} checked={!!autoScrollTabs[t.id]} onToggle={() => setAutoScrollTabs(prev => ({ ...prev, [t.id]: !prev[t.id] }))} appTheme={appTheme} />
+                                    ))}
                                 </div>
                             </div>
 
