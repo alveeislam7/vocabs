@@ -182,6 +182,8 @@
         .familiarity-select { min-width: 155px; }
         /* Gallery swipe: the inner scroll areas would otherwise grab horizontal touch drags, so only the card header swiped. */
         .swipe-deck-wrap, .swipe-deck-wrap * { touch-action: pan-y; }
+        /* Listen mode: the line being read aloud right now */
+        .listen-now { background-color: rgba(250, 204, 21, 0.40) !important; border-radius: 6px; box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.40); transition: background-color .2s, box-shadow .2s; }
         .panel-fade { transition: opacity 0.28s ease, transform 0.28s ease; }
         .fam-icon-full {font-size: 23px;line-height: 1;transform: translateY(-2px);}
         .speed-timer-badge { min-width: 74px; min-height: 28px; box-sizing: border-box; contain: layout; overflow: hidden; }
@@ -569,14 +571,15 @@
             const loadVoicePrefs = () => {
                 try {
                     const raw = localStorage.getItem(VOICE_PREFS_KEY);
-                    if (!raw) return { usVoiceURI: null, ukVoiceURI: null };
+                    if (!raw) return { usVoiceURI: null, ukVoiceURI: null, bnVoiceURI: null };
                     const parsed = JSON.parse(raw);
                     return {
                         usVoiceURI: parsed.usVoiceURI || null,
-                        ukVoiceURI: parsed.ukVoiceURI || null
+                        ukVoiceURI: parsed.ukVoiceURI || null,
+                        bnVoiceURI: parsed.bnVoiceURI || null
                     };
                 } catch (e) {
-                    return { usVoiceURI: null, ukVoiceURI: null };
+                    return { usVoiceURI: null, ukVoiceURI: null, bnVoiceURI: null };
                 }
             };
 
@@ -667,6 +670,25 @@
 
             const getVoicePrefs = () => ({ ...voicePrefs });
 
+            // Bangla (bn-BD / bn-IN ...) voices that this browser/device actually has
+            const bengaliVoices = () => getSpeechVoices()
+                .filter(v => v.lang && /^bn/i.test(String(v.lang).replace('_', '-')))
+                .sort((a, b) => (/google/i.test(b.name) ? 1 : 0) - (/google/i.test(a.name) ? 1 : 0));
+            const resolveBnVoice = (preferredURI) => {
+                const all = bengaliVoices();
+                if (preferredURI) { const picked = all.find(v => v.voiceURI === preferredURI); if (picked) return picked; }
+                return all[0] || null;
+            };
+            const speakBn = (text, notify) => {
+                if (!('speechSynthesis' in window)) return;
+                const v = resolveBnVoice(loadVoicePrefs().bnVoiceURI);
+                if (!v) { if (notify) notify('No Bangla voice was found on this device.'); return; }
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance(text);
+                u.voice = v; u.lang = v.lang; u.rate = 0.9;
+                window.speechSynthesis.speak(u);
+            };
+
             const speakText = (text, accent = 'uk', notify, options = {}) => {
                 if (!text || !String(text).trim()) return;
                 if (!('speechSynthesis' in window)) {
@@ -703,6 +725,9 @@
                 loadVoicePrefs,
                 speakText,
                 langForAccent,
+                bengaliVoices,
+                resolveBnVoice,
+                speakBn,
                 formatVoiceLabel,
                 detectProvider,
                 detectGender
@@ -1030,12 +1055,12 @@
                 <div className={`mt-1 space-y-1 text-left ${className}`}>
                     {context && (
                         <div className="flex items-center gap-2 border-l-[3px] border-indigo-500 bg-slate-500/[0.07] rounded-r-md pl-2.5 pr-2">
-                            <p className="min-w-0 text-[13px] leading-[1.4] font-medium text-slate-800">{context}</p>
+                            <p data-listen-kind="context" className="min-w-0 text-[13px] leading-[1.4] font-medium text-slate-800">{context}</p>
                         </div>
                     )}
                     {example && (
                         <div className="flex items-center gap-2 border-l-[3px] border-emerald-500 bg-slate-500/[0.07] rounded-r-md pl-2.5 pr-1">
-                            <p className="flex-1 min-w-0 text-[13px] leading-[1.4] font-medium text-slate-800">“{example}”</p>
+                            <p data-listen-kind="example" className="flex-1 min-w-0 text-[13px] leading-[1.4] font-medium text-slate-800">“{example}”</p>
                             <SpeakPair text={example} notify={notify} accent={accent} isSentence boxed={false} className="shrink-0 -my-[7px]" />
                         </div>
                     )}
@@ -1043,14 +1068,14 @@
             );
         };
 
-        const RelatedWordBlock = ({ entry, tone, accent, notify, show = { phonetics: true, meaning_bn: true, meaning_en: true, context: true, example: true, note: true }, famLevel = 'unfamiliar', onSetFamiliarity = null, cornerAction = null, boxPadding = 'p-5' }) => {
+        const RelatedWordBlock = ({ entry, tone, accent, notify, show = { phonetics: true, meaning_bn: true, meaning_en: true, context: true, example: true, note: true }, famLevel = 'unfamiliar', onSetFamiliarity = null, listenKey = '', cornerAction = null, boxPadding = 'p-5' }) => {
             const ts = RELATED_TONE_STYLES[tone] || RELATED_TONE_STYLES.syn;
             return (
-            <div className={`rounded-2xl ${boxPadding} border shadow-sm hover:shadow-md transition-all text-left ${familiarityCardBorder(famLevel)}`}>
+            <div data-listen-entry={listenKey || undefined} className={`rounded-2xl ${boxPadding} border shadow-sm hover:shadow-md transition-all text-left ${familiarityCardBorder(famLevel)}`}>
                 <div className="flex justify-between items-start gap-2">
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center flex-wrap gap-2">
-                            <span className={`text-base font-bold leading-snug ${ts.title}`}>{entry.word}</span>
+                            <span data-listen-kind="word" className={`text-base font-bold leading-snug ${ts.title}`}>{entry.word}</span>
                             <SpeakPair text={entry.word} notify={notify} accent={accent} boxed={false} className="-my-1.5" />
                             {show.phonetics && entry.phonetics && (
                                 <span className="text-[11px] font-mono text-indigo-600">
@@ -1060,10 +1085,10 @@
                         </div>
                         <div className="mt-1 space-y-1">
                             {show.meaning_bn && entry.meaning_bn && (
-                                <p className={`text-[13px] leading-[1.4] font-semibold ${ts.meaning}`}>{entry.meaning_bn}</p>
+                                <p data-listen-kind="bn" className={`text-[13px] leading-[1.4] font-semibold ${ts.meaning}`}>{entry.meaning_bn}</p>
                             )}
                             {show.meaning_en && entry.meaning_en && (
-                                <p className="text-[13px] leading-[1.4] font-medium text-slate-800">{entry.meaning_en}</p>
+                                <p data-listen-kind="en" className="text-[13px] leading-[1.4] font-medium text-slate-800">{entry.meaning_en}</p>
                             )}
                         </div>
                     </div>
@@ -1138,6 +1163,7 @@
                                 <RelatedWordBlock
                                     entry={mainWordAsEntry(item)}
                                     tone="main"
+                                    listenKey="main"
                                     accent={accent}
                                     notify={notify}
                                     show={{ phonetics: fv.phonetics, meaning_bn: fv.meaning_bn, meaning_en: fv.meaning_en, context: fv.context_main, example: fv.example_main, note: fv.note }}
@@ -1156,6 +1182,7 @@
                                                         key={entryId}
                                                         entry={s}
                                                         tone="syn"
+                                                        listenKey={`syn-${i}`}
                                                         accent={accent}
                                                         notify={notify}
                                                         show={synShow}
@@ -1179,6 +1206,7 @@
                                                         key={entryId}
                                                         entry={a}
                                                         tone="ant"
+                                                        listenKey={`ant-${i}`}
                                                         accent={accent}
                                                         notify={notify}
                                                         show={antShow}
@@ -1249,6 +1277,7 @@
                                     <RelatedWordBlock
                                         entry={mainWordAsEntry(item)}
                                         tone="main"
+                                        listenKey="main"
                                         accent={accent}
                                         notify={notify}
                                         show={{ phonetics: fv.phonetics, meaning_bn: fv.meaning_bn, meaning_en: fv.meaning_en, context: fv.context_main, example: fv.example_main, note: fv.note }}
@@ -1269,6 +1298,7 @@
                                                     key={entryId}
                                                     entry={s}
                                                     tone="syn"
+                                                    listenKey={`syn-${i}`}
                                                     accent={accent}
                                                     notify={notify}
                                                     show={synShow}
@@ -1292,6 +1322,7 @@
                                                     key={entryId}
                                                     entry={a}
                                                     tone="ant"
+                                                    listenKey={`ant-${i}`}
                                                     accent={accent}
                                                     notify={notify}
                                                     show={antShow}
@@ -1353,6 +1384,7 @@
                         <RelatedWordBlock
                             entry={mainWordAsEntry(item)}
                             tone="main"
+                            listenKey="main"
                             accent={accent}
                             notify={notify}
                             show={{ phonetics: fv.phonetics, meaning_bn: fv.meaning_bn, meaning_en: fv.meaning_en, context: fv.context_main, example: fv.example_main, note: fv.note }}
@@ -1371,6 +1403,7 @@
                                             key={entryId}
                                             entry={s}
                                             tone="syn"
+                                            listenKey={`syn-${i}`}
                                             accent={accent}
                                             notify={notify}
                                             show={synShow}
@@ -1393,6 +1426,7 @@
                                             key={entryId}
                                             entry={a}
                                             tone="ant"
+                                            listenKey={`ant-${i}`}
                                             accent={accent}
                                             notify={notify}
                                             show={antShow}
@@ -5209,7 +5243,7 @@
         // suppressed only while an intentional horizontal drag is in progress.
         // After the slide finishes, the parent commits the new index and the
         // track snaps back to centre with no animation.
-        function SwipeDeck({ prev, cur, next, onPrev, onNext, label, className = '' }) {
+        function SwipeDeck({ prev, cur, next, onPrev, onNext, label, className = '', deckRef = null }) {
             const wrapRef = useRef(null);
             const trackRef = useRef(null);
             const g = useRef({ down: false, axis: null, x0: 0, y0: 0, t0: 0, dx: 0, busy: false, pid: null });
@@ -5236,6 +5270,7 @@
                 }, 300);
             };
 
+            if (deckRef) deckRef.current = { next: () => slideTo(1), prev: () => slideTo(-1) };
             const onPointerDown = (e) => {
                 if (g.current.busy) return;
                 // Ignore right-clicks / middle-clicks; allow mouse + touch + pen.
@@ -5282,7 +5317,7 @@
             };
 
             const pane = (node, key) => (
-                <div key={key} className="w-1/3 shrink-0 min-w-0 px-0.5 h-full">{node}</div>
+                <div key={key} data-pane={key} className="w-1/3 shrink-0 min-w-0 px-0.5 h-full">{node}</div>
             );
 
             return (
@@ -5740,6 +5775,7 @@
 
             const usVoiceOptions = useMemo(() => SpeechEngine.voicesForLang('en-US'), [voiceListTick]);
             const ukVoiceOptions = useMemo(() => SpeechEngine.voicesForLang('en-GB'), [voiceListTick]);
+            const bnVoiceOptions = useMemo(() => SpeechEngine.bengaliVoices(), [voiceListTick]);
 
             // TAB & NAVIGATION STATE
             const [activeTab, setActiveTab] = useState('list');
@@ -8247,6 +8283,129 @@ Rules:
             }, []);
             useEffect(() => { if (barLockRef.current && barApiRef.current) barApiRef.current.reset(); }, [showNotifPanel, showMsgPanel, menuOpen]);
 
+            // ===== LISTEN: read the whole chunk aloud, family by family =====
+            // For every word: the word, Bangla, English, "Use context" + context, "Example" + example, then the same
+            // for each synonym ("Synonym of ...") and each antonym. Home slides to the family being read and
+            // highlights the line that is being pronounced. Speed / pause / Bangla voice are in Word Manager.
+            const [listenCfg, setListenCfg] = useState(() => {
+                try { return { rate: 0.9, gapMs: 500, ...(JSON.parse(localStorage.getItem('wordsmart_listen_cfg_v1') || 'null') || {}) }; } catch (e) { return { rate: 0.9, gapMs: 500 }; }
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_listen_cfg_v1', JSON.stringify(listenCfg)); } catch (e) {} }, [listenCfg]);
+            const listenCfgRef = useRef(listenCfg);
+            listenCfgRef.current = listenCfg;
+            const [listenStatus, setListenStatus] = useState('idle');   // idle | playing | paused
+            const [listenPos, setListenPos] = useState({ wi: 0, total: 0 });
+            const listenRef = useRef({ token: 0, words: [], wi: 0, pi: 0, paused: false, slideNext: false });
+            const homeDeckRef = useRef(null);
+            const selectedIdRef = useRef(null);
+            selectedIdRef.current = selectedWordId;
+            const listenCtxRef = useRef({});
+            listenCtxRef.current = { fieldVisibility, showBangla, speechAccent };
+            const listenSleep = (ms) => new Promise(r => setTimeout(r, ms));
+            const listenClearMark = () => document.querySelectorAll('.listen-now').forEach(el => el.classList.remove('listen-now'));
+            const listenMark = (entryKey, kind) => {
+                listenClearMark();
+                const root = document.querySelector('#word-detail-panel [data-pane="c"]') || document;
+                const el = root.querySelector(`[data-listen-entry="${entryKey}"] [data-listen-kind="${kind}"]`);
+                if (el) { el.classList.add('listen-now'); try { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {} }
+            };
+            const listenParts = (w) => {
+                const { fieldVisibility: fv, showBangla: showBn } = listenCtxRef.current;
+                const parts = [];
+                const add = (entryKey, kind, text, lang = 'en') => { const t = String(text || '').trim(); if (t) parts.push({ entryKey, kind, text: t, lang }); };
+                const entryParts = (key, e, vis, intro) => {
+                    if (intro) add(key, 'word', intro);
+                    add(key, 'word', e.word);
+                    if (vis.bn && showBn) add(key, 'bn', e.meaning_bn, 'bn');
+                    if (vis.en) add(key, 'en', e.meaning_en);
+                    if (vis.context && e.context) { add(key, 'context', 'Use context'); add(key, 'context', e.context); }
+                    if (vis.example && e.sentence) { add(key, 'example', 'Example'); add(key, 'example', e.sentence); }
+                };
+                entryParts('main', mainWordAsEntry(w), { bn: fv.meaning_bn, en: fv.meaning_en, context: fv.context_main, example: fv.example_main }, '');
+                if (fv.synonyms) (w.synonyms || []).forEach((e, i) => entryParts(`syn-${i}`, e, { bn: fv.synonyms_meaning_bn, en: fv.synonyms_meaning_en, context: fv.synonyms_context, example: fv.synonyms_example }, `Synonym of ${w.word}`));
+                if (fv.antonyms) (w.antonyms || []).forEach((e, i) => entryParts(`ant-${i}`, e, { bn: fv.antonyms_meaning_bn, en: fv.antonyms_meaning_en, context: fv.antonyms_context, example: fv.antonyms_example }, `Antonym of ${w.word}`));
+                return parts;
+            };
+            const listenSpeak = (seg) => new Promise((resolve) => {
+                if (!('speechSynthesis' in window)) return resolve();
+                const ctx = listenCtxRef.current;
+                const cfg = listenCfgRef.current;
+                const u = new SpeechSynthesisUtterance(seg.text);
+                if (seg.lang === 'bn') {
+                    const v = SpeechEngine.resolveBnVoice(SpeechEngine.loadVoicePrefs().bnVoiceURI);
+                    if (!v) return resolve();            // no Bangla voice on this device -> skip the Bangla part
+                    u.voice = v; u.lang = v.lang;
+                } else {
+                    const prefs = SpeechEngine.loadVoicePrefs();
+                    const v = SpeechEngine.resolveVoice(ctx.speechAccent, ctx.speechAccent === 'uk' ? prefs.ukVoiceURI : prefs.usVoiceURI);
+                    if (v) u.voice = v;
+                    u.lang = SpeechEngine.langForAccent(ctx.speechAccent);
+                }
+                u.rate = cfg.rate;
+                let done = false;
+                const finish = () => { if (!done) { done = true; clearTimeout(safety); resolve(); } };
+                // some browsers occasionally never fire "end" — don't let the player hang
+                const safety = setTimeout(finish, Math.max(4000, (seg.text.length * 130) / Math.max(0.4, cfg.rate) + 3000));
+                u.onend = finish; u.onerror = finish;
+                window.speechSynthesis.speak(u);
+            });
+            const listenRun = async (token) => {
+                const L = listenRef.current;
+                setListenStatus('playing');
+                while (L.wi < L.words.length) {
+                    if (L.token !== token) return;
+                    const w = L.words[L.wi];
+                    setListenPos({ wi: L.wi, total: L.words.length });
+                    if (selectedIdRef.current !== w.id) {
+                        if (L.slideNext && homeDeckRef.current) { homeDeckRef.current.next(); await listenSleep(480); }
+                        if (selectedIdRef.current !== w.id) { setSelectedWordId(w.id); await listenSleep(150); }
+                    }
+                    if (L.token !== token) return;
+                    const parts = listenParts(w);
+                    for (; L.pi < parts.length; L.pi++) {
+                        if (L.token !== token) return;
+                        const seg = parts[L.pi];
+                        listenMark(seg.entryKey, seg.kind);
+                        await listenSpeak(seg);
+                        if (L.token !== token) return;
+                        if (L.paused) return;                       // resuming replays this part
+                        await listenSleep(listenCfgRef.current.gapMs);
+                        if (L.token !== token) return;
+                        if (L.paused) { L.pi++; return; }
+                    }
+                    L.pi = 0; L.wi++; L.slideNext = true;
+                }
+                L.token++;
+                listenClearMark();
+                setListenStatus('idle');
+                triggerToast('Finished reading the chunk. 🎧');
+            };
+            const listenStart = () => {
+                if (!('speechSynthesis' in window)) { triggerToast('This browser cannot read aloud.'); return; }
+                if (!filteredWords.length) { triggerToast('There are no words to read in this list.'); return; }
+                let start = filteredWords.findIndex(w => w.id === selectedWordId);
+                if (start < 0) start = 0;
+                window.speechSynthesis.cancel();
+                const L = listenRef.current;
+                L.token++; L.words = filteredWords; L.wi = start; L.pi = 0; L.paused = false; L.slideNext = false;
+                if (!SpeechEngine.bengaliVoices().length && showBangla) triggerToast('No Bangla voice found on this device, so the Bangla meanings will be skipped.');
+                listenRun(L.token);
+            };
+            const listenPause = () => { listenRef.current.paused = true; window.speechSynthesis.cancel(); setListenStatus('paused'); };
+            const listenResume = () => { const L = listenRef.current; L.paused = false; L.token++; listenRun(L.token); };
+            const listenStop = () => { const L = listenRef.current; L.token++; L.paused = false; window.speechSynthesis.cancel(); listenClearMark(); setListenStatus('idle'); };
+            const listenSkip = (delta) => {
+                const L = listenRef.current;
+                const nw = Math.min(L.words.length - 1, Math.max(0, L.wi + delta));
+                L.token++; L.paused = false; window.speechSynthesis.cancel();
+                L.wi = nw; L.pi = 0; L.slideNext = false;
+                listenRun(L.token);
+            };
+            // leaving Home (where the controls live) stops the reading
+            useEffect(() => { if (activeTab !== 'list' && listenRef.current.words.length && listenStatus !== 'idle') listenStop(); // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [activeTab]);
+            useEffect(() => () => { try { window.speechSynthesis.cancel(); } catch (e) {} }, []);
+
             // PHONE: after tapping a tab, glide down past the big header so the tab's content is on screen.
             // Each tab can be switched on/off in Word Manager.
             const [autoScrollTabs, setAutoScrollTabs] = useState(() => {
@@ -9915,8 +10074,22 @@ Rules:
 
                                 {/* LEFT: word names only */}
                                 <div className="word-list-pane-resizable w-full shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[30rem] lg:h-[min(46rem,86vh)]" style={listPaneWidth !== null ? { '--list-pane-w': `${listPaneWidth}px` } : undefined}>
-                                    <div className={`shrink-0 h-11 flex items-center px-4 border-b border-slate-100 transition-shadow ${leftPaneScrolled ? 'shadow-[0_2px_4px_-2px_rgba(0,0,0,0.08)]' : ''}`}>
+                                    <div className={`shrink-0 h-11 flex items-center justify-between gap-2 px-4 border-b border-slate-100 transition-shadow ${leftPaneScrolled ? 'shadow-[0_2px_4px_-2px_rgba(0,0,0,0.08)]' : ''}`}>
                                         <span className="text-[11px] font-bold text-indigo-600 uppercase tracking-wider">Word</span>
+                                        {listenStatus === 'idle' ? (
+                                            <button type="button" onClick={listenStart} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-black transition-colors" title="Read this list aloud — word, meanings, context, example, synonyms and antonyms">
+                                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2" /><rect x="3" y="14" width="4" height="6" rx="1.5" /><rect x="17" y="14" width="4" height="6" rx="1.5" /></svg>
+                                                <span>Listen</span>
+                                            </button>
+                                        ) : (
+                                            <div className="flex items-center gap-1">
+                                                <span className="text-[10px] font-bold text-slate-400 tabular-nums mr-0.5">{listenPos.wi + 1}/{listenPos.total}</span>
+                                                <button type="button" onClick={() => listenSkip(-1)} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] leading-none" title="Previous word">⏮</button>
+                                                <button type="button" onClick={listenStatus === 'playing' ? listenPause : listenResume} className="w-7 h-7 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] leading-none" title={listenStatus === 'playing' ? 'Pause' : 'Resume'}>{listenStatus === 'playing' ? '⏸' : '▶'}</button>
+                                                <button type="button" onClick={() => listenSkip(1)} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] leading-none" title="Next word">⏭</button>
+                                                <button type="button" onClick={listenStop} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-rose-100 text-[11px] leading-none" title="Stop">⏹</button>
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="flex-1 min-h-0 overflow-y-auto" onScroll={(e) => setLeftPaneScrolled(e.currentTarget.scrollTop > 4)}>
                                         {pagedWords.map((item) => {
@@ -10002,6 +10175,7 @@ Rules:
                                         return (
                                             <SwipeDeck
                                                 className="h-full"
+                                                deckRef={homeDeckRef}
                                                 label={`${idx + 1} / ${filteredWords.length}`}
                                                 prev={prevItem ? { node: cardFor(prevItem) } : null}
                                                 next={nextItem ? { node: cardFor(nextItem) } : null}
@@ -10223,6 +10397,7 @@ Rules:
                                                                                     key={entryId}
                                                                                     entry={s}
                                                                                     tone="syn"
+                                                                                    listenKey={`syn-${i}`}
                                                                                     accent={speechAccent}
                                                                                     notify={triggerToast}
                                                                                     famLevel={getWordFamiliarityLevel(currentFamiliarityMap, entryId)}
@@ -10244,6 +10419,7 @@ Rules:
                                                                                     key={entryId}
                                                                                     entry={a}
                                                                                     tone="ant"
+                                                                                    listenKey={`ant-${i}`}
                                                                                     accent={speechAccent}
                                                                                     notify={triggerToast}
                                                                                     famLevel={getWordFamiliarityLevel(currentFamiliarityMap, entryId)}
@@ -11252,9 +11428,9 @@ Rules:
                                         <h2 className="text-lg font-extrabold flex items-center gap-2"><span>🔊</span> Pronunciation Voices</h2>
                                         <p className="text-[11px] mt-0.5 opacity-70">Pick a US/UK voice or leave it on Auto. Chrome adds Google voices while online; Edge adds Microsoft Neural voices.</p>
                                     </div>
-                                    <button type="button" onClick={() => updateVoicePrefs({ usVoiceURI: null, ukVoiceURI: null })} className="text-[11px] font-bold opacity-70 hover:opacity-100 underline shrink-0">Reset both to auto</button>
+                                    <button type="button" onClick={() => updateVoicePrefs({ usVoiceURI: null, ukVoiceURI: null, bnVoiceURI: null })} className="text-[11px] font-bold opacity-70 hover:opacity-100 underline shrink-0">Reset both to auto</button>
                                 </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                     {[
                                         { label: 'US', accent: 'us', opts: usVoiceOptions, prefKey: 'usVoiceURI' },
                                         { label: 'UK', accent: 'uk', opts: ukVoiceOptions, prefKey: 'ukVoiceURI' },
@@ -11271,6 +11447,24 @@ Rules:
                                                     {v.opts.map(o => (
                                                         <option key={o.voiceURI} value={o.voiceURI}>{SpeechEngine.formatVoiceLabel(o)}</option>
                                                     ))}
+                                    <div className="space-y-1">
+                                        <label className="text-[11px] font-semibold opacity-80">Bangla ({bnVoiceOptions.length} voice{bnVoiceOptions.length === 1 ? '' : 's'})</label>
+                                        <div className="flex items-center gap-2">
+                                            <select
+                                                value={voicePrefs.bnVoiceURI || ''}
+                                                onChange={(e) => updateVoicePrefs({ bnVoiceURI: e.target.value || null })}
+                                                disabled={!bnVoiceOptions.length}
+                                                className="flex-1 min-w-0 px-3 py-2 rounded-xl text-xs font-medium border focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                                            >
+                                                <option value="">{bnVoiceOptions.length ? 'Auto (best match)' : 'No Bangla voice on this device'}</option>
+                                                {bnVoiceOptions.map(o => (
+                                                    <option key={o.voiceURI} value={o.voiceURI}>{SpeechEngine.formatVoiceLabel(o)}</option>
+                                                ))}
+                                            </select>
+                                            <button type="button" disabled={!bnVoiceOptions.length} onClick={() => SpeechEngine.speakBn('এটি একটি পরীক্ষা', triggerToast)} className={`px-3 py-2 rounded-xl text-xs font-bold border shrink-0 disabled:opacity-40 ${appTheme === 'light' ? 'bg-white border-slate-200 hover:bg-slate-50' : 'bg-slate-800/70 border-slate-600 hover:bg-slate-700'}`}>▶ Test</button>
+                                        </div>
+                                        <p className="text-[10px] opacity-60">Used by Listen mode. No Bangla voice here? Listen simply skips the Bangla meanings.</p>
+                                    </div>
                                                 </select>
                                                 <button type="button" onClick={() => speakWord(`Hello, this is a test of the ${v.label} voice.`, v.accent, triggerToast)} className={`px-3 py-2 rounded-xl text-xs font-bold border shrink-0 ${appTheme === 'light' ? 'bg-white border-slate-200 hover:bg-slate-50' : 'bg-slate-800/70 border-slate-600 hover:bg-slate-700'}`}>▶ Test {v.label}</button>
                                             </div>
@@ -11323,6 +11517,30 @@ Rules:
                                         ))}
                                         <span className="text-[11px] opacity-60 ml-1">{currentWords.length} words → {chunksList.length} chunk{chunksList.length === 1 ? '' : 's'}</span>
                                     </div>
+                                </div>
+                            </div>
+
+                            {/* LISTEN SETTINGS */}
+                            <div className={`rounded-2xl border shadow-sm p-4 space-y-3 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
+                                <div>
+                                    <h2 className="text-lg font-extrabold flex items-center gap-2"><span>🎧</span> Listen mode</h2>
+                                    <p className="text-[11px] mt-0.5 opacity-70">Tap <b>Listen</b> beside "Word" on Home and the app reads the chunk aloud — word, Bangla, English, context, example, then every synonym and antonym — sliding to each family and highlighting the line it is saying.</p>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <label className="block">
+                                        <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider opacity-70"><span>Reading speed</span><span className="text-indigo-500">{listenCfg.rate.toFixed(2)}×</span></div>
+                                        <input type="range" min="0.5" max="1.5" step="0.05" value={listenCfg.rate} onChange={(e) => setListenCfg(c => ({ ...c, rate: Number(e.target.value) }))} className="w-full accent-indigo-600" />
+                                        <div className="flex justify-between text-[10px] opacity-50"><span>Slower</span><span>Faster</span></div>
+                                    </label>
+                                    <label className="block">
+                                        <div className="flex justify-between text-[11px] font-extrabold uppercase tracking-wider opacity-70"><span>Pause between parts</span><span className="text-indigo-500">{(listenCfg.gapMs / 1000).toFixed(1)}s</span></div>
+                                        <input type="range" min="0" max="1500" step="100" value={listenCfg.gapMs} onChange={(e) => setListenCfg(c => ({ ...c, gapMs: Number(e.target.value) }))} className="w-full accent-indigo-600" />
+                                        <div className="flex justify-between text-[10px] opacity-50"><span>None</span><span>1.5s</span></div>
+                                    </label>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <button type="button" onClick={() => SpeechEngine.speakText('Abase. To degrade or humble.', speechAccent, triggerToast)} className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${appTheme === 'light' ? 'bg-white border-slate-200 hover:bg-slate-50' : 'bg-slate-800/70 border-slate-600 hover:bg-slate-700'}`}>▶ Hear a sample</button>
+                                    <button type="button" onClick={() => setListenCfg({ rate: 0.9, gapMs: 500 })} className="text-[11px] font-bold opacity-70 hover:opacity-100 underline">Reset</button>
                                 </div>
                             </div>
 
