@@ -182,6 +182,8 @@
         .familiarity-select { min-width: 155px; }
         /* Gallery swipe: the inner scroll areas would otherwise grab horizontal touch drags, so only the card header swiped. */
         .swipe-deck-wrap, .swipe-deck-wrap * { touch-action: pan-y; }
+        .swipe-deck-wrap p, .swipe-deck-wrap h1, .swipe-deck-wrap h2, .swipe-deck-wrap h3, .swipe-deck-wrap h4, .swipe-deck-wrap li, .swipe-deck-wrap span { cursor: text; }
+        .swipe-deck-wrap button, .swipe-deck-wrap button * { cursor: pointer; }
         /* Listen mode: the line being read aloud right now */
         .listen-now { background-color: rgba(250, 204, 21, 0.40) !important; border-radius: 6px; box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.40); transition: background-color .2s, box-shadow .2s; }
         .panel-fade { transition: opacity 0.28s ease, transform 0.28s ease; }
@@ -2562,37 +2564,7 @@
                             {/* Streak + Daily Goal card — replaces the old Level/XP badge.
                                 Left: a flame with the current day-streak. Right: today's
                                 word goal with a progress bar. */}
-                            {(() => {
-                                const goal = Math.max(1, dailyGoal || 1);
-                                const done = Math.max(0, todayLearned || 0);
-                                const pct = Math.min(100, Math.round((done / goal) * 100));
-                                const reached = done >= goal;
-                                const light = appTheme === 'light';
-                                return (
-                                    <div
-                                        className={`flex items-stretch rounded-2xl overflow-hidden border min-w-[250px] ${light ? 'bg-white border-slate-200 shadow-sm' : 'bg-white/5 border-white/15'}`}
-                                        title={`${streak || 0}-day streak · ${done}/${goal} words today`}
-                                    >
-                                        <div className={`flex flex-col items-center justify-center px-3.5 py-2 ${streak > 0 ? 'bg-gradient-to-b from-orange-400 to-rose-500 text-white' : (light ? 'bg-slate-100 text-slate-400' : 'bg-white/10 text-white/40')}`}>
-                                            <span className="text-lg leading-none">🔥</span>
-                                            <span className="text-base font-black leading-none mt-1">{streak || 0}</span>
-                                            <span className="text-[8px] font-extrabold uppercase tracking-widest opacity-90 mt-0.5">day{streak === 1 ? '' : 's'}</span>
-                                        </div>
-                                        <div className="flex-1 px-3 py-2 flex flex-col justify-center gap-1.5">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <span className={`text-[10px] font-extrabold uppercase tracking-wider ${light ? 'text-slate-500' : 'text-white/60'}`}>Today's goal</span>
-                                                <span className={`text-[11px] font-black ${reached ? 'text-emerald-500' : (light ? 'text-slate-700' : 'text-white')}`}>{done}/{goal} words</span>
-                                            </div>
-                                            <div className={`h-2 rounded-full overflow-hidden ${light ? 'bg-slate-200' : 'bg-white/15'}`}>
-                                                <div className={`h-full rounded-full transition-all duration-500 ${reached ? 'bg-emerald-500' : 'bg-gradient-to-r from-amber-400 to-orange-500'}`} style={{ width: `${pct}%` }} />
-                                            </div>
-                                            <span className={`text-[10px] font-semibold ${light ? 'text-slate-400' : 'text-white/45'}`}>
-                                                {reached ? '🎉 Goal reached — keep the flame alive!' : `${goal - done} more to hit today's goal`}
-                                            </span>
-                                        </div>
-                                    </div>
-                                );
-                            })()}
+                            
                             <FocusControls />
                         </div>
                     )}
@@ -5243,7 +5215,7 @@
         // suppressed only while an intentional horizontal drag is in progress.
         // After the slide finishes, the parent commits the new index and the
         // track snaps back to centre with no animation.
-        function SwipeDeck({ prev, cur, next, onPrev, onNext, label, className = '', deckRef = null }) {
+        function SwipeDeck({ prev, cur, next, onPrev, onNext, label, className = '', deckRef = null, center = null }) {
             const wrapRef = useRef(null);
             const trackRef = useRef(null);
             const g = useRef({ down: false, axis: null, x0: 0, y0: 0, t0: 0, dx: 0, busy: false, pid: null });
@@ -5270,13 +5242,29 @@
                 }, 300);
             };
 
-            if (deckRef) deckRef.current = { next: () => slideTo(1), prev: () => slideTo(-1) };
+            // Animated slide that commits an exact target (not "one step from wherever we are").
+            const slideAndCommit = (dir, commit) => new Promise((resolve) => {
+                const s = g.current;
+                const w = wrapRef.current ? wrapRef.current.offsetWidth : 0;
+                if (s.busy || !w) { resolve(false); return; }
+                s.busy = true;
+                setX(-dir * w, true);
+                setTimeout(() => {
+                    try { ReactDOM.flushSync(() => { commit(); }); } catch (e) { try { commit(); } catch (e2) {} }
+                    setX(0, false);
+                    s.busy = false;
+                    resolve(true);
+                }, 300);
+            });
+            if (deckRef) deckRef.current = { next: () => slideTo(1), prev: () => slideTo(-1), slide: slideAndCommit };
             const onPointerDown = (e) => {
                 if (g.current.busy) return;
                 // Ignore right-clicks / middle-clicks; allow mouse + touch + pen.
                 if (e.pointerType === 'mouse' && e.button !== 0) return;
                 // Don't start a drag from interactive controls (buttons, inputs).
                 if (e.target && e.target.closest && e.target.closest('button, a, input, textarea, select, label')) return;
+                // A mouse pressed ON text selects it (I-beam cursor); swiping starts from the card's empty areas. Touch still swipes anywhere.
+                if (e.pointerType === 'mouse' && e.target && e.target.closest && e.target.closest('p, span, h1, h2, h3, h4, li')) return;
                 const s = g.current;
                 s.down = true; s.axis = null; s.x0 = e.clientX; s.y0 = e.clientY; s.t0 = Date.now(); s.dx = 0; s.pid = e.pointerId;
             };
@@ -5324,7 +5312,7 @@
                 <div className={`flex flex-col ${className}`}>
                     <div
                         ref={wrapRef}
-                        className="swipe-deck-wrap flex-1 min-h-0 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+                        className="swipe-deck-wrap flex-1 min-h-0 overflow-hidden cursor-grab active:cursor-grabbing"
                         style={{ touchAction: 'pan-y' }}
                         onPointerDown={onPointerDown}
                         onPointerMove={onPointerMove}
@@ -5339,12 +5327,12 @@
                     </div>
                     <div className="flex items-center justify-between gap-2 mt-2 shrink-0">
                         <button type="button" onClick={() => slideTo(-1)} disabled={!hasPrev}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${hasPrev ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}>
+                            className={`${center && center.active ? 'hidden sm:inline-flex ' : ''}px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${hasPrev ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}>
                             ‹ Prev
                         </button>
-                        <span className="text-[11px] font-semibold text-slate-400">{label}<span className="hidden sm:inline"> · drag / swipe anywhere · or buttons</span><span className="sm:hidden"> · swipe ↔</span></span>
+                        {center ? <div className="flex-1 min-w-0 flex justify-center">{center.node}</div> : <span className="text-[11px] font-semibold text-slate-400">{label}<span className="hidden sm:inline"> · drag / swipe anywhere · or buttons</span><span className="sm:hidden"> · swipe ↔</span></span>}
                         <button type="button" onClick={() => slideTo(1)} disabled={!hasNext}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${hasNext ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}>
+                            className={`${center && center.active ? 'hidden sm:inline-flex ' : ''}px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${hasNext ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}>
                             Next ›
                         </button>
                     </div>
@@ -7460,6 +7448,26 @@ Rules:
                 return out;
             }, [filteredWords, examInclude.synonyms, examInclude.antonyms]);
 
+            // FLASHCARDS: their own on/off switches for synonym / antonym cards (separate from "Exam content")
+            const [flashInclude, setFlashInclude] = useState(() => {
+                try { const v = JSON.parse(localStorage.getItem('wordsmart_flash_include_v1') || 'null'); return { synonyms: v ? v.synonyms !== false : true, antonyms: v ? v.antonyms !== false : true }; } catch (e) { return { synonyms: true, antonyms: true }; }
+            });
+            useEffect(() => { try { localStorage.setItem('wordsmart_flash_include_v1', JSON.stringify(flashInclude)); } catch (e) {} }, [flashInclude]);
+            const flashPool = useMemo(() => {
+                const out = [];
+                filteredWords.forEach(w => {
+                    out.push(w);
+                    const kids = (list, tone) => (list || []).forEach((e, i) => out.push({
+                        ...e, id: getRelatedEntryId(w.id, tone, i, e), meaning_en: e.meaning_en, meaning_bn: e.meaning_bn,
+                        context_main: e.context, example_main: e.sentence, synonyms: [], antonyms: [],
+                        relatedTo: w.word, relatedTone: tone, familyOf: w
+                    }));
+                    if (flashInclude.synonyms) kids(w.synonyms, 'syn');
+                    if (flashInclude.antonyms) kids(w.antonyms, 'ant');
+                });
+                return out;
+            }, [filteredWords, flashInclude.synonyms, flashInclude.antonyms]);
+
             // WORD QUEST — review mode pool: the mistaken words themselves, padded
             // with a handful of unique extra words (never duplicated — Word Match
             // samples cards directly from this array, so repeats would create
@@ -7820,8 +7828,8 @@ Rules:
             }, [quizOverallTimeLeft]);
 
             useEffect(() => {
-                if (cardIndex >= playablePool.length) setCardIndex(0);
-            }, [playablePool.length]);
+                if (cardIndex >= flashPool.length) setCardIndex(0);
+            }, [playablePool.length, flashPool.length]);
 
             useEffect(() => {
                 setSelectedChunks([]);
@@ -7829,8 +7837,8 @@ Rules:
             }, [selectedBookId]);
 
             useEffect(() => {
-                if (activeTab === 'flashcards' && playablePool[cardIndex] && autoAudio) {
-                    speakWord(playablePool[cardIndex].word, speechAccent, triggerToast);
+                if (activeTab === 'flashcards' && flashPool[cardIndex] && autoAudio) {
+                    speakWord(flashPool[cardIndex].word, speechAccent, triggerToast);
                 }
                 setIsFlipped(false);
                 setCardDetailsExpanded(false);
@@ -8209,6 +8217,12 @@ Rules:
                 setActiveTab('quiz');
                 setTimeout(() => buildAndStartQuiz(items), 150);
             };
+            const deleteStudySession = (id) => {
+                if (!window.confirm('Delete this study session and its exam marks?')) return;
+                setStudyHistory(prev => prev.filter(h => h.id !== id));
+                setStudyExams(prev => prev.filter(e => e.sessionId !== id));
+            };
+            const deleteStudyExam = (id) => setStudyExams(prev => prev.filter(e => e.id !== id));
             const startExamOnStudied = (result) => {
                 const ids = new Set((result.perWord || []).filter(x => x.sec >= 3).map(x => String(x.id)));
                 const items = currentWords.filter(w => ids.has(String(w.id)));
@@ -8309,6 +8323,26 @@ Rules:
                 const el = root.querySelector(`[data-listen-entry="${entryKey}"] [data-listen-kind="${kind}"]`);
                 if (el) { el.classList.add('listen-now'); try { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {} }
             };
+            // Select a family exactly (and its list page); used by every move so the card can never fall behind the audio
+            const listenCommit = (w) => {
+                const L = listenRef.current;
+                const wi = L.words.findIndex(x => x.id === w.id);
+                if (wi >= 0) setCurrentPage(Math.floor(wi / itemsPerPage) + 1);
+                setSelectedWordId(w.id);
+            };
+            // Show a family: slide to it (dir 1 = next, -1 = previous, 0 = no animation), then make sure it really is selected
+            const listenShow = async (w, dir, tk) => {
+                const L = listenRef.current;
+                if (!w) return;
+                if (selectedIdRef.current !== w.id && dir && homeDeckRef.current && homeDeckRef.current.slide) {
+                    await homeDeckRef.current.slide(dir, () => listenCommit(w));
+                }
+                for (let i = 0; i < 6 && L.token === tk && selectedIdRef.current !== w.id; i++) {
+                    listenCommit(w);
+                    await listenSleep(180);
+                }
+                await listenSleep(120);
+            };
             const listenParts = (w) => {
                 const { fieldVisibility: fv, showBangla: showBn } = listenCtxRef.current;
                 const parts = [];
@@ -8357,14 +8391,17 @@ Rules:
                     const w = L.words[L.wi];
                     setListenPos({ wi: L.wi, total: L.words.length });
                     if (selectedIdRef.current !== w.id) {
-                        if (L.slideNext && homeDeckRef.current) { homeDeckRef.current.next(); await listenSleep(480); }
-                        if (selectedIdRef.current !== w.id) { setSelectedWordId(w.id); await listenSleep(150); }
+                        await listenShow(w, L.slideNext ? 1 : 0, token);
+                        if (L.token !== token) return;
                     }
+                    // phones stack the list above the family box, so bring the family box into view
+                    if (window.innerWidth < 1024) { const panel = document.getElementById('word-detail-panel'); if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
                     if (L.token !== token) return;
                     const parts = listenParts(w);
                     for (; L.pi < parts.length; L.pi++) {
                         if (L.token !== token) return;
                         const seg = parts[L.pi];
+                        if (selectedIdRef.current !== w.id) listenCommit(w);      // keep the card on the family being read
                         listenMark(seg.entryKey, seg.kind);
                         await listenSpeak(seg);
                         if (L.token !== token) return;
@@ -8394,17 +8431,140 @@ Rules:
             const listenPause = () => { listenRef.current.paused = true; window.speechSynthesis.cancel(); setListenStatus('paused'); };
             const listenResume = () => { const L = listenRef.current; L.paused = false; L.token++; listenRun(L.token); };
             const listenStop = () => { const L = listenRef.current; L.token++; L.paused = false; window.speechSynthesis.cancel(); listenClearMark(); setListenStatus('idle'); };
-            const listenSkip = (delta) => {
+            // Jump to a place in the reading: (family, part). `slideDir` animates the Home card to the next / previous family.
+            const listenGoTo = async (wi, pi, slideDir) => {
                 const L = listenRef.current;
-                const nw = Math.min(L.words.length - 1, Math.max(0, L.wi + delta));
-                L.token++; L.paused = false; window.speechSynthesis.cancel();
-                L.wi = nw; L.pi = 0; L.slideNext = false;
-                listenRun(L.token);
+                if (!L.words.length) return;
+                wi = Math.min(L.words.length - 1, Math.max(0, wi));
+                const tk = ++L.token;
+                L.paused = false;
+                window.speechSynthesis.cancel();
+                const changed = wi !== L.wi;
+                L.wi = wi; L.pi = Math.max(0, pi); L.slideNext = false;
+                if (changed) {
+                    await listenShow(L.words[wi], slideDir, tk);
+                    if (L.token !== tk) return;
+                }
+                listenRun(tk);
             };
+            const entryStarts = (parts) => { const st = []; parts.forEach((p, i) => { if (i === 0 || p.entryKey !== parts[i - 1].entryKey) st.push(i); }); return st; };
+            // previous / next LINE (word, Bangla, English, context, example ...)
+            const listenLine = (d) => {
+                const L = listenRef.current;
+                if (!L.words[L.wi]) return;
+                const parts = listenParts(L.words[L.wi]);
+                const np = L.pi + d;
+                if (np < 0) {
+                    if (L.wi === 0) return listenGoTo(0, 0, 0);
+                    return listenGoTo(L.wi - 1, Math.max(0, listenParts(L.words[L.wi - 1]).length - 1), -1);
+                }
+                if (np >= parts.length) { if (L.wi >= L.words.length - 1) return; return listenGoTo(L.wi + 1, 0, 1); }
+                return listenGoTo(L.wi, np, 0);
+            };
+            // previous / next WORD inside the family (main word -> synonyms -> antonyms)
+            const listenEntry = (d) => {
+                const L = listenRef.current;
+                if (!L.words[L.wi]) return;
+                const parts = listenParts(L.words[L.wi]);
+                const starts = entryStarts(parts);
+                const curStart = starts.filter(x => x <= L.pi).pop() || 0;
+                if (d > 0) {
+                    const nxt = starts.find(x => x > L.pi);
+                    if (nxt !== undefined) return listenGoTo(L.wi, nxt, 0);
+                    if (L.wi >= L.words.length - 1) return;
+                    return listenGoTo(L.wi + 1, 0, 1);
+                }
+                if (L.pi > curStart) return listenGoTo(L.wi, curStart, 0);
+                const prevStart = starts.filter(x => x < curStart).pop();
+                if (prevStart !== undefined) return listenGoTo(L.wi, prevStart, 0);
+                if (L.wi === 0) return listenGoTo(0, 0, 0);
+                const pst = entryStarts(listenParts(L.words[L.wi - 1]));
+                return listenGoTo(L.wi - 1, pst.length ? pst[pst.length - 1] : 0, -1);
+            };
+            // previous / next FAMILY (slides the card)
+            const listenFamily = (d) => {
+                const L = listenRef.current;
+                if (!L.words[L.wi]) return;
+                const nw = L.wi + d;
+                if (nw < 0 || nw >= L.words.length) return;
+                listenGoTo(nw, 0, d);
+            };
+            const listenSkip = listenFamily;
+            // The control that sits between Prev and Next under the family box
+            const listenCenter = (() => {
+                const hp = <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2" /><rect x="3" y="14" width="4" height="6" rx="1.5" /><rect x="17" y="14" width="4" height="6" rx="1.5" /></svg>;
+                if (listenStatus === 'idle') {
+                    return {
+                        active: false,
+                        node: (
+                            <button type="button" onClick={listenStart} className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-sm transition-colors active:scale-95" title="Read this list aloud — word, meanings, context, example, synonyms and antonyms">
+                                {hp}<span>Listen</span>
+                            </button>
+                        ),
+                    };
+                }
+                const btn = 'w-7 h-7 sm:w-8 sm:h-8 rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900 flex items-center justify-center transition-colors active:scale-95 shrink-0';
+                const ic = (children, fill) => <svg className="w-4 h-4" viewBox="0 0 24 24" fill={fill ? 'currentColor' : 'none'} stroke={fill ? 'none' : 'currentColor'} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>;
+                const sep = <span className="w-px h-5 bg-slate-200 shrink-0 mx-0.5" />;
+                return {
+                    active: true,
+                    node: (
+                        <div className="flex items-center justify-center gap-1 flex-wrap">
+                            <span className="hidden md:inline text-[10px] font-bold text-slate-400 tabular-nums mr-1">{listenPos.wi + 1}/{listenPos.total}</span>
+                            <button type="button" onClick={() => listenFamily(-1)} className={btn} title="Previous family" aria-label="Previous family">{ic(<><path d="M19 20L9 12l10-8v16z" /><path d="M5 5v14" stroke="currentColor" strokeWidth="2.2" /></>, true)}</button>
+                            <button type="button" onClick={() => listenEntry(-1)} className={btn} title="Previous word in this family (synonym / antonym)" aria-label="Previous word in family">{ic(<><path d="M11 17l-5-5 5-5" /><path d="M18 17l-5-5 5-5" /></>)}</button>
+                            <button type="button" onClick={() => listenLine(-1)} className={btn} title="Previous line" aria-label="Previous line">{ic(<path d="M15 18l-6-6 6-6" />)}</button>
+                            {sep}
+                            <button type="button" onClick={listenStatus === 'playing' ? listenPause : listenResume} className="w-8 sm:w-9 h-7 sm:h-8 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shadow-sm transition-colors active:scale-95 shrink-0" title={listenStatus === 'playing' ? 'Pause' : 'Resume'} aria-label={listenStatus === 'playing' ? 'Pause' : 'Resume'}>
+                                {listenStatus === 'playing' ? ic(<><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></>, true) : ic(<path d="M7 4l13 8-13 8V4z" />, true)}
+                            </button>
+                            {sep}
+                            <button type="button" onClick={() => listenLine(1)} className={btn} title="Next line" aria-label="Next line">{ic(<path d="M9 18l6-6-6-6" />)}</button>
+                            <button type="button" onClick={() => listenEntry(1)} className={btn} title="Next word in this family (synonym / antonym)" aria-label="Next word in family">{ic(<><path d="M13 17l5-5-5-5" /><path d="M6 17l5-5-5-5" /></>)}</button>
+                            <button type="button" onClick={() => listenFamily(1)} className={btn} title="Next family" aria-label="Next family">{ic(<><path d="M5 4l10 8-10 8V4z" /><path d="M19 5v14" stroke="currentColor" strokeWidth="2.2" /></>, true)}</button>
+                            {sep}
+                            <button type="button" onClick={listenStop} className="w-7 h-7 sm:w-8 sm:h-8 rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 flex items-center justify-center transition-colors active:scale-95 shrink-0" title="Stop listening" aria-label="Stop listening">
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+                            </button>
+                        </div>
+                    ),
+                };
+            })();
+
             // leaving Home (where the controls live) stops the reading
             useEffect(() => { if (activeTab !== 'list' && listenRef.current.words.length && listenStatus !== 'idle') listenStop(); // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [activeTab]);
             useEffect(() => () => { try { window.speechSynthesis.cancel(); } catch (e) {} }, []);
+
+            // SELECT ANY TEXT -> a small "Pronounce" button appears next to it (works on every screen)
+            const [selPron, setSelPron] = useState(null);
+            useEffect(() => {
+                let t = 0;
+                const update = () => {
+                    const sel = window.getSelection();
+                    if (!sel || sel.isCollapsed || sel.rangeCount === 0) { setSelPron(null); return; }
+                    const text = sel.toString().replace(/\s+/g, ' ').trim();
+                    if (!text || text.length > 180 || text.split(' ').length > 25) { setSelPron(null); return; }
+                    const node = sel.anchorNode && (sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode);
+                    if (node && node.closest && node.closest('input, textarea, select, [contenteditable="true"]')) { setSelPron(null); return; }
+                    const r = sel.getRangeAt(0).getBoundingClientRect();
+                    if (!r || (!r.width && !r.height)) { setSelPron(null); return; }
+                    const x = Math.min(window.innerWidth - 130, Math.max(8, r.left + r.width / 2 - 55));
+                    const y = r.top > 60 ? r.top - 44 : r.bottom + 10;
+                    setSelPron({ text, x, y });
+                };
+                const onChange = () => { clearTimeout(t); t = setTimeout(update, 140); };
+                const hide = () => setSelPron(null);
+                document.addEventListener('selectionchange', onChange);
+                window.addEventListener('scroll', hide, { passive: true });
+                return () => { clearTimeout(t); document.removeEventListener('selectionchange', onChange); window.removeEventListener('scroll', hide); };
+            }, []);
+            const pronounceSelection = () => {
+                if (!selPron) return;
+                const text = selPron.text;
+                if (/[\u0980-\u09FF]/.test(text)) SpeechEngine.speakBn(text, triggerToast);   // Bangla letters -> Bangla voice
+                else speakWord(text, speechAccent, triggerToast);
+            };
 
             // PHONE: after tapping a tab, glide down past the big header so the tab's content is on screen.
             // Each tab can be switched on/off in Word Manager.
@@ -8653,6 +8813,21 @@ Rules:
                             <span>💡</span>
                             <span>{toastMessage}</span>
                         </div>
+                    )}
+
+                    {/* SELECT-TO-PRONOUNCE button */}
+                    {selPron && (
+                        <button
+                            type="button"
+                            onPointerDown={(e) => e.preventDefault()}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={pronounceSelection}
+                            style={{ position: 'fixed', left: selPron.x, top: selPron.y, zIndex: 90 }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-600 text-white text-xs font-black shadow-xl hover:bg-indigo-700 active:scale-95"
+                        >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3z" /><path d="M14.5 4.53v1.06A6.99 6.99 0 0 1 18.5 12a6.99 6.99 0 0 1-4 6.41v1.06A8 8 0 0 0 20 12a8 8 0 0 0-5.5-7.47z" /></svg>
+                            Pronounce
+                        </button>
                     )}
 
                     {/* MODAL: MEMORIZE TIMER SETUP */}
@@ -9818,45 +9993,47 @@ Rules:
                                 </div>
                             </div>
 
-                            {/* TODAY'S GOAL + FAMILIARITY — compact, side by side */}
+                            {/* TODAY'S GOAL + FAMILIARITY — slim two-line cards */}
                             <div className="grid grid-cols-2 sm:flex sm:flex-row gap-1.5 sm:gap-2 w-full md:w-auto">
-                                <div className="bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-400/30 rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 backdrop-blur-md sm:min-w-[210px]">
-                                    <div className="flex items-center justify-between gap-2 text-[11px] sm:text-xs font-semibold mb-0.5 sm:mb-1">
-                                        <button type="button" onClick={() => setActiveTab('stats')} title="Open Stats & Streak" className="flex-1 flex items-center justify-between gap-2 text-left">
-                                            <span>🎯 Today's goal</span>
-                                            <span className="font-black text-amber-300">{todaysActivity.learned}/{dailyGoal}</span>
+                                <div className="rounded-xl px-2.5 sm:px-3 py-1.5 bg-white/[0.08] border border-white/15 backdrop-blur-md sm:min-w-[200px]">
+                                    <div className="flex items-center gap-1.5 text-[11px] font-semibold text-white/85">
+                                        <button type="button" onClick={() => setActiveTab('stats')} title="Open Stats & Streak" className="flex-1 min-w-0 flex items-center gap-1.5 text-left">
+                                            <svg className="w-3.5 h-3.5 text-amber-300 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1.2" fill="currentColor" /></svg>
+                                            <span className="truncate">Today</span>
+                                            <span className="font-black text-amber-300 tabular-nums">{todaysActivity.learned}/{dailyGoal}</span>
+                                            <span className="hidden lg:inline text-white/50 font-medium truncate">· {currentStreak}-day streak</span>
                                         </button>
-                                        <button type="button" onClick={openDailyGoalSettings} title="Change daily goal" className="w-5 h-5 shrink-0 rounded-md bg-white/10 hover:bg-white/25 text-[11px] leading-none flex items-center justify-center">⚙</button>
+                                        <button type="button" onClick={openDailyGoalSettings} title="Change daily goal" aria-label="Change daily goal" className="w-5 h-5 shrink-0 rounded-md bg-white/10 hover:bg-white/25 flex items-center justify-center text-white/80">
+                                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></svg>
+                                        </button>
                                     </div>
-                                    <div className="w-full bg-slate-950/40 rounded-full h-1.5 sm:h-2.5 overflow-hidden border border-amber-400/20">
-                                        <div className={`h-full transition-all duration-500 ${todaysActivity.learned >= dailyGoal ? 'bg-emerald-400' : 'bg-amber-400'}`} style={{ width: `${Math.min(100, (todaysActivity.learned / dailyGoal) * 100)}%` }} />
-                                    </div>
-                                    <div className="hidden sm:flex justify-between text-[10px] text-amber-100/80 mt-1">
-                                        <span>{todaysActivity.learned >= dailyGoal ? '🎉 Goal reached!' : `${dailyGoal - todaysActivity.learned} more to go`}</span>
-                                        <span>🔥 {currentStreak}-day streak</span>
+                                    <div className="mt-1 h-1.5 rounded-full bg-black/25 overflow-hidden">
+                                        <div className={`h-full rounded-full transition-all duration-500 ${todaysActivity.learned >= dailyGoal ? 'bg-emerald-400' : 'bg-gradient-to-r from-amber-300 to-orange-400'}`} style={{ width: `${Math.min(100, (todaysActivity.learned / dailyGoal) * 100)}%` }} />
                                     </div>
                                 </div>
 
-                                <div className="bg-white/10 backdrop-blur-md rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 border border-white/20 sm:min-w-[210px]">
-                                    <div className="flex justify-between text-[11px] sm:text-xs font-semibold mb-0.5 sm:mb-1">
-                                        <span>Familiarity</span>
-                                        <span>{currentWords.length > 0 ? Math.round((familiarityCounts.familiar / currentWords.length) * 100) : 0}% familiar</span>
+                                <div className="rounded-xl px-2.5 sm:px-3 py-1.5 bg-white/[0.08] border border-white/15 backdrop-blur-md sm:min-w-[200px]">
+                                    <div className="flex items-center gap-1.5 text-[11px] font-semibold text-white/85">
+                                        <svg className="w-3.5 h-3.5 text-emerald-300 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 21c0-9 5-15 15-16 0 10-5 16-15 16z" /><path d="M5 21c2-5 5-8 9-10" /></svg>
+                                        <span className="hidden sm:inline truncate">Familiar</span>
+                                        <span className="font-black text-emerald-300 tabular-nums">{currentWords.length > 0 ? Math.round((familiarityCounts.familiar / currentWords.length) * 100) : 0}%</span>
+                                        <span className="ml-auto flex items-center gap-1 text-[10px] tabular-nums">
+                                            {[['unfamiliar', 'bg-slate-300', 'Show unfamiliar'], ['semi', 'bg-amber-400', 'Show semi-familiar'], ['familiar', 'bg-emerald-400', 'Show familiar']].map(([k, dot, title]) => (
+                                                <button key={k} type="button" title={title} onClick={() => setFilterFamiliarities(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])}
+                                                    className={`flex items-center gap-1 px-1 py-0.5 rounded transition-colors ${filterFamiliarities.includes(k) ? 'bg-white/25 text-white font-bold' : 'text-white/70 hover:text-white hover:bg-white/10'}`}>
+                                                    <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />{familiarityCounts[k]}
+                                                </button>
+                                            ))}
+                                        </span>
                                     </div>
-                                    <div className="w-full bg-slate-950/40 rounded-full h-1.5 sm:h-2.5 overflow-hidden flex border border-indigo-400/20">
-                                        {currentWords.length > 0 ? (
+                                    <div className="mt-1 h-1.5 rounded-full bg-black/25 overflow-hidden flex">
+                                        {currentWords.length > 0 && (
                                             <>
                                                 <div className="h-full bg-slate-400 transition-all duration-500" style={{ width: `${(familiarityCounts.unfamiliar / currentWords.length) * 100}%` }} title="Unfamiliar" />
                                                 <div className="h-full bg-amber-400 transition-all duration-500" style={{ width: `${(familiarityCounts.semi / currentWords.length) * 100}%` }} title="Semi-familiar" />
                                                 <div className="h-full bg-emerald-400 transition-all duration-500" style={{ width: `${(familiarityCounts.familiar / currentWords.length) * 100}%` }} title="Familiar" />
                                             </>
-                                        ) : (
-                                            <div className="h-full w-full bg-slate-600/50" />
                                         )}
-                                    </div>
-                                    <div className="flex justify-between text-[10px] text-indigo-200 mt-0.5 sm:mt-1 gap-1">
-                                        <button type="button" title="Show unfamiliar" onClick={() => setFilterFamiliarities(prev => prev.includes('unfamiliar') ? prev.filter(x => x !== 'unfamiliar') : [...prev, 'unfamiliar'])} className={`hover:text-white hover:no-underline no-underline transition-colors ${filterFamiliarities.includes('unfamiliar')?'text-white font-bold':''}`}>○ {familiarityCounts.unfamiliar}</button>
-                                        <button type="button" title="Show semi-familiar" onClick={() => setFilterFamiliarities(prev => prev.includes('semi') ? prev.filter(x => x !== 'semi') : [...prev, 'semi'])} className={`hover:text-white hover:no-underline no-underline transition-colors ${filterFamiliarities.includes('semi')?'text-amber-200 font-bold':''}`}>◐ {familiarityCounts.semi}</button>
-                                        <button type="button" title="Show familiar" onClick={() => setFilterFamiliarities(prev => prev.includes('familiar') ? prev.filter(x => x !== 'familiar') : [...prev, 'familiar'])} className={`hover:text-white hover:no-underline no-underline transition-colors inline-flex items-center gap-0.5 ${filterFamiliarities.includes('familiar')?'text-emerald-200 font-bold':''}`}><span style={{fontSize:'16px',lineHeight:1,transform:'translateY(-2px)',display:'inline-block'}}>●</span> {familiarityCounts.familiar}</button>
                                     </div>
                                 </div>
                             </div>
@@ -10074,22 +10251,8 @@ Rules:
 
                                 {/* LEFT: word names only */}
                                 <div className="word-list-pane-resizable w-full shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[30rem] lg:h-[min(46rem,86vh)]" style={listPaneWidth !== null ? { '--list-pane-w': `${listPaneWidth}px` } : undefined}>
-                                    <div className={`shrink-0 h-11 flex items-center justify-between gap-2 px-4 border-b border-slate-100 transition-shadow ${leftPaneScrolled ? 'shadow-[0_2px_4px_-2px_rgba(0,0,0,0.08)]' : ''}`}>
+                                    <div className={`shrink-0 h-11 flex items-center px-4 border-b border-slate-100 transition-shadow ${leftPaneScrolled ? 'shadow-[0_2px_4px_-2px_rgba(0,0,0,0.08)]' : ''}`}>
                                         <span className="text-[11px] font-bold text-indigo-600 uppercase tracking-wider">Word</span>
-                                        {listenStatus === 'idle' ? (
-                                            <button type="button" onClick={listenStart} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-black transition-colors" title="Read this list aloud — word, meanings, context, example, synonyms and antonyms">
-                                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2" /><rect x="3" y="14" width="4" height="6" rx="1.5" /><rect x="17" y="14" width="4" height="6" rx="1.5" /></svg>
-                                                <span>Listen</span>
-                                            </button>
-                                        ) : (
-                                            <div className="flex items-center gap-1">
-                                                <span className="text-[10px] font-bold text-slate-400 tabular-nums mr-0.5">{listenPos.wi + 1}/{listenPos.total}</span>
-                                                <button type="button" onClick={() => listenSkip(-1)} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] leading-none" title="Previous word">⏮</button>
-                                                <button type="button" onClick={listenStatus === 'playing' ? listenPause : listenResume} className="w-7 h-7 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] leading-none" title={listenStatus === 'playing' ? 'Pause' : 'Resume'}>{listenStatus === 'playing' ? '⏸' : '▶'}</button>
-                                                <button type="button" onClick={() => listenSkip(1)} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] leading-none" title="Next word">⏭</button>
-                                                <button type="button" onClick={listenStop} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-rose-100 text-[11px] leading-none" title="Stop">⏹</button>
-                                            </div>
-                                        )}
                                     </div>
                                     <div className="flex-1 min-h-0 overflow-y-auto" onScroll={(e) => setLeftPaneScrolled(e.currentTarget.scrollTop > 4)}>
                                         {pagedWords.map((item) => {
@@ -10176,6 +10339,7 @@ Rules:
                                             <SwipeDeck
                                                 className="h-full"
                                                 deckRef={homeDeckRef}
+                                                center={listenCenter}
                                                 label={`${idx + 1} / ${filteredWords.length}`}
                                                 prev={prevItem ? { node: cardFor(prevItem) } : null}
                                                 next={nextItem ? { node: cardFor(nextItem) } : null}
@@ -10236,7 +10400,7 @@ Rules:
                     )}
 
                     {/* MODE 2: FLASHCARDS VIEW */}
-                    {activeTab === 'flashcards' && playablePool.length > 0 && (
+                    {activeTab === 'flashcards' && flashPool.length > 0 && (
                         <div className="max-w-xl mx-auto space-y-6">
                             <div className="flex items-center justify-between bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-sm">
                                 <div className="flex items-center gap-3">
@@ -10249,15 +10413,23 @@ Rules:
                                         />
                                         Auto Audio
                                     </label>
+                                    <label className="flex items-center gap-1.5 cursor-pointer text-xs font-semibold text-slate-700">
+                                        <input type="checkbox" checked={flashInclude.synonyms} onChange={(e) => { setFlashInclude(p => ({ ...p, synonyms: e.target.checked })); setCardIndex(0); }} className="rounded text-emerald-600 focus:ring-emerald-500" />
+                                        Synonyms
+                                    </label>
+                                    <label className="flex items-center gap-1.5 cursor-pointer text-xs font-semibold text-slate-700">
+                                        <input type="checkbox" checked={flashInclude.antonyms} onChange={(e) => { setFlashInclude(p => ({ ...p, antonyms: e.target.checked })); setCardIndex(0); }} className="rounded text-rose-600 focus:ring-rose-500" />
+                                        Antonyms
+                                    </label>
                                 </div>
                                 <span className="text-xs font-semibold text-slate-500">
-                                    Card {cardIndex + 1} of {playablePool.length} · click flip · gallery swipe
+                                    Card {cardIndex + 1} of {flashPool.length} · click flip · gallery swipe
                                 </span>
                             </div>
 
                             {/* FLIP CARD inside gallery SwipeDeck — same slide as Word List */}
                             {(() => {
-                                const n = playablePool.length;
+                                const n = flashPool.length;
                                 const prevIdx = n > 1 ? (cardIndex - 1 + n) % n : null;
                                 const nextIdx = n > 1 ? (cardIndex + 1) % n : null;
                                 const flashPreview = (item) => (
@@ -10279,8 +10451,8 @@ Rules:
                                 return (
                             <SwipeDeck
                                 label={`Card ${cardIndex + 1} / ${n}`}
-                                prev={prevIdx != null ? { node: flashPreview(playablePool[prevIdx]) } : null}
-                                next={nextIdx != null ? { node: flashPreview(playablePool[nextIdx]) } : null}
+                                prev={prevIdx != null ? { node: flashPreview(flashPool[prevIdx]) } : null}
+                                next={nextIdx != null ? { node: flashPreview(flashPool[nextIdx]) } : null}
                                 onPrev={() => goFlash('prev')}
                                 onNext={() => goFlash('next')}
                                 cur={
@@ -10301,14 +10473,14 @@ Rules:
                                             <span>{activeBook.name}</span>
                                         </div>
                                         <div className="flex-1 flex flex-col items-center justify-center space-y-3">
-                                            <h2 className="text-4xl font-extrabold tracking-wide">{playablePool[cardIndex].word}</h2>
-                                            {fieldVisibility.phonetics && playablePool[cardIndex].phonetics && (
+                                            <h2 className="text-4xl font-extrabold tracking-wide">{flashPool[cardIndex].word}</h2>
+                                            {fieldVisibility.phonetics && flashPool[cardIndex].phonetics && (
                                                 <p className="text-indigo-200 font-mono text-base bg-indigo-900/40 px-3 py-1 rounded-full border border-indigo-400/30 inline-block">
-                                                    [{playablePool[cardIndex].phonetics}]
+                                                    [{flashPool[cardIndex].phonetics}]
                                                 </p>
                                             )}
                                             <div className="flex justify-center" onClick={(e) => e.stopPropagation()}>
-                                                <SpeakPair text={playablePool[cardIndex].word} notify={triggerToast} accent={speechAccent} variant="onDark" primaryAudioBtn />
+                                                <SpeakPair text={flashPool[cardIndex].word} notify={triggerToast} accent={speechAccent} variant="onDark" primaryAudioBtn />
                                             </div>
                                         </div>
                                     </div>
@@ -10335,16 +10507,16 @@ Rules:
                                         </div>
                                         <div className="space-y-3 w-full flex-1 min-h-0 overflow-y-auto">
                                             <div className="space-y-1">
-                                                {fieldVisibility.meaning_bn && showBangla && (playablePool[cardIndex].meaning_bn || playablePool[cardIndex].bangla) && (
-                                                    <p className="text-2xl font-bold text-emerald-700">{playablePool[cardIndex].meaning_bn || playablePool[cardIndex].bangla}</p>
+                                                {fieldVisibility.meaning_bn && showBangla && (flashPool[cardIndex].meaning_bn || flashPool[cardIndex].bangla) && (
+                                                    <p className="text-2xl font-bold text-emerald-700">{flashPool[cardIndex].meaning_bn || flashPool[cardIndex].bangla}</p>
                                                 )}
                                                 {fieldVisibility.meaning_en && (
-                                                    <p className="text-base font-medium text-slate-500">{playablePool[cardIndex].meaning_en || playablePool[cardIndex].meaning}</p>
+                                                    <p className="text-base font-medium text-slate-500">{flashPool[cardIndex].meaning_en || flashPool[cardIndex].meaning}</p>
                                                 )}
                                             </div>
                                             {/* Level 1 (always visible once flipped): phonetic (front) + bangla/English
                                                 meaning + context + example — just this one word, flashcard-style. */}
-                                            <ContextExampleBox context={fieldVisibility.context_main ? playablePool[cardIndex].context_main : ''} example={fieldVisibility.example_main ? (playablePool[cardIndex].example_main || playablePool[cardIndex].sentence) : ''} notify={triggerToast} accent={speechAccent} />
+                                            <ContextExampleBox context={fieldVisibility.context_main ? flashPool[cardIndex].context_main : ''} example={fieldVisibility.example_main ? (flashPool[cardIndex].example_main || flashPool[cardIndex].sentence) : ''} notify={triggerToast} accent={speechAccent} />
                                             {/* Level 2 (nested dropdown, top-right icon below): the rest of the
                                                 word family — synonyms/antonyms. If this card is itself showing
                                                 a synonym/antonym (flattened from its main word into the
@@ -10354,7 +10526,7 @@ Rules:
                                                 word, this behaves exactly as before (no main word is already
                                                 shown, so it isn't repeated here). */}
                                             {cardDetailsExpanded && (() => {
-                                                const cur = playablePool[cardIndex];
+                                                const cur = flashPool[cardIndex];
                                                 const isRelated = !!(cur.relatedTone && cur.familyOf);
                                                 const famSource = isRelated ? cur.familyOf : cur;
                                                 const famSyns = fieldVisibility.synonyms ? (famSource.synonyms || []) : [];
@@ -10466,18 +10638,18 @@ Rules:
                             <div className="flex justify-between items-center gap-4">
                                 <button
                                     data-flash-prev
-                                    onClick={() => { setCardSlideDir('prev'); setIsFlipped(false); setCardDetailsExpanded(false); setCardIndex((prev) => (prev > 0 ? prev - 1 : playablePool.length - 1)); }}
+                                    onClick={() => { setCardSlideDir('prev'); setIsFlipped(false); setCardDetailsExpanded(false); setCardIndex((prev) => (prev > 0 ? prev - 1 : flashPool.length - 1)); }}
                                     className="flex-1 py-3 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl shadow-sm hover:bg-slate-50 active:scale-95 transition-all"
                                 >
                                     ← Previous
                                 </button>
                                 <FamiliarityPicker
-                                    level={getFamiliarity(playablePool[cardIndex].id)}
-                                    onSet={(level) => setWordFamiliarity(playablePool[cardIndex].id, level)}
+                                    level={getFamiliarity(flashPool[cardIndex].id)}
+                                    onSet={(level) => setWordFamiliarity(flashPool[cardIndex].id, level)}
                                 />
                                 <button
                                     data-flash-next
-                                    onClick={() => { setCardSlideDir('next'); setIsFlipped(false); setCardIndex((prev) => (prev < playablePool.length - 1 ? prev + 1 : 0)); }}
+                                    onClick={() => { setCardSlideDir('next'); setIsFlipped(false); setCardIndex((prev) => (prev < flashPool.length - 1 ? prev + 1 : 0)); }}
                                     className="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-md hover:bg-indigo-700 active:scale-95 transition-all"
                                 >
                                     Next →
@@ -11345,13 +11517,14 @@ Rules:
                                                                     <span className="text-xs text-slate-400">{open ? '▴' : '▾'}</span>
                                                                 </button>
                                                                 <div className="px-3 pb-2.5 pt-2 border-t border-slate-200 flex flex-wrap items-center gap-1.5">
-                                                                    <button type="button" onClick={() => startExamOnStudied(h)} disabled={h.covered < 1} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-[11px] font-black hover:bg-indigo-700 disabled:opacity-40">📝 Take exam ({h.covered} words)</button>
+                                                                    <button type="button" onClick={() => startExamOnStudied(h)} disabled={h.covered < 1} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-[11px] font-black hover:bg-indigo-700 disabled:opacity-40">{attempts.length ? '🔁 Retake exam' : '📝 Take exam'} ({h.covered} words)</button>
                                                                     {attempts.length === 0 && <span className="text-[11px] text-slate-400">No exam taken yet</span>}
                                                                     {attempts.slice(0, 6).map(e => (
-                                                                        <span key={e.id} title={prettyDate(e.ts)} className={`px-2 py-0.5 rounded-full border text-[11px] font-bold ${pctOfExam(e) >= 80 ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : pctOfExam(e) >= 50 ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-rose-50 border-rose-200 text-rose-600'}`}>{e.correct}/{e.total} · {pctOfExam(e)}%</span>
+                                                                        <span key={e.id} title={prettyDate(e.ts)} className={`inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full border text-[11px] font-bold ${pctOfExam(e) >= 80 ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : pctOfExam(e) >= 50 ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-rose-50 border-rose-200 text-rose-600'}`}>{e.correct}/{e.total} · {pctOfExam(e)}%<button type="button" onClick={() => deleteStudyExam(e.id)} title="Delete this attempt" className="w-4 h-4 rounded-full text-[10px] leading-none opacity-60 hover:opacity-100 hover:bg-black/10">✕</button></span>
                                                                     ))}
                                                                     {attempts.length > 6 && <span className="text-[11px] text-slate-400">+{attempts.length - 6} more</span>}
                                                                     {chunkBest >= 0 && <span className="ml-auto text-[11px] font-bold text-emerald-600">🏆 Best on this chunk: {chunkBest}%</span>}
+                                                                    <button type="button" onClick={() => deleteStudySession(h.id)} className={`${chunkBest >= 0 ? '' : 'ml-auto '}px-2.5 py-1.5 rounded-lg border border-slate-300 text-[11px] font-bold text-slate-500 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-300`}>🗑 Delete</button>
                                                                 </div>
                                                                 {open && (
                                                                     <div className="px-3 pb-3 pt-1 border-t border-slate-200">
