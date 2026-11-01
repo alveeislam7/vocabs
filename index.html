@@ -5475,61 +5475,6 @@
                 return () => { cancelled = true; };
             }, []);
 
-            // AUTO-FETCH PUBLISHED DEFAULT DATA (words-data.json)
-            // First-time visitors — anyone whose browser has NO saved
-            // Companion data yet — automatically pull whichever books/words
-            // you've published to `words-data.json` in this same repo, right
-            // next to index.html. That way, anyone opening your GitHub Pages
-            // link sees your latest words without importing anything.
-            //
-            // Returning visitors (this browser already has saved data/progress,
-            // including this device) are left completely untouched — this only
-            // ever fires once, before anything is ever written to localStorage.
-            //
-            // TO PUBLISH NEW WORDS/PAGES: in the app, go to Data Management and
-            // click "💾 Export Backup". Rename the downloaded file to exactly
-            // words-data.json, then upload/replace it in your GitHub repo next
-            // to index.html and commit. No further code changes ever needed —
-            // just repeat this whenever you add more words or pages.
-            useEffect(() => {
-                // Wait for the IndexedDB check above to finish, since on a
-                // returning visitor the words may live ONLY in IndexedDB
-                // (localStorage's copy gets cleared once it's migrated) —
-                // checking localStorage alone would wrongly look empty.
-                if (!idbDataChecked) return;
-
-                const hasLocalData = idbHadDataRef.current
-                    || localStorage.getItem('wordsmart_all_words_map')
-                    || localStorage.getItem('wordsmart_custom_books_list')
-                    || localStorage.getItem('wordsmart_data_ws1')
-                    || localStorage.getItem('wordsmart_data_ws2');
-                if (hasLocalData) return;
-
-                fetch('words-data.json', { cache: 'no-store' })
-                    .then(res => (res.ok ? res.json() : null))
-                    .then(payload => {
-                        if (!payload || typeof payload !== 'object') return;
-                        const importedBooks = Array.isArray(payload.books) ? payload.books : null;
-                        const importedWords = payload.allWords && typeof payload.allWords === 'object' ? payload.allWords : null;
-                        if (!importedBooks || !importedWords) return;
-
-                        setBooks(importedBooks);
-                        setAllWords(importedWords);
-                        if (payload.allFamiliarity && typeof payload.allFamiliarity === 'object') {
-                            setAllFamiliarity(payload.allFamiliarity);
-                        }
-                        if (payload.allTrash && typeof payload.allTrash === 'object') {
-                            setAllTrash(payload.allTrash);
-                        }
-                        const fallbackBookId = importedBooks.find(b => b?.id)?.id;
-                        if (fallbackBookId) setSelectedBookId(fallbackBookId);
-                    })
-                    .catch(() => {
-                        // No words-data.json published yet (or this is a local
-                        // file:// open where fetch can't work) — silently keep
-                        // the built-in defaults already loaded above.
-                    });
-            }, [idbDataChecked]);
 
             // BANGLA TOGGLE SWITCH
             const [showBangla, setShowBangla] = useState(() => {
@@ -6726,6 +6671,157 @@ Rules:
             // Reset the one-time "have we loaded this user's cloud data yet?"
             // flag whenever who's signed in changes (sign in, sign out, switch account).
             useEffect(() => { cloudPulledRef.current = false; }, [cloudUser]);
+
+            // ===== PUBLISHED WORD LIBRARY (words-data.json next to index.html on GitHub) =====
+            // • New visitors get the published words automatically.
+            // • Everyone else (signed in or not) is asked to import any NEW published words — only missing words are
+            //   added; their marks, history, XP and edits are never touched. A word they deleted is not re-added.
+            // • Word Manager → "Reset to default" replaces the published books with the published versions.
+            const PUBLISHED_SIG_KEY = 'wordsmart_published_sig_v1';
+            const [publishedModal, setPublishedModal] = useState(null);   // { pub, diff, sig } — blocking until imported
+            const [publishedStatus, setPublishedStatus] = useState({ state: 'idle', checkedAt: 0, books: 0, words: 0, error: '' });
+            const publishedRunRef = useRef('');
+            const latestLibRef = useRef({});
+            latestLibRef.current = { books, allWords, allTrash };
+            const hashText = (t) => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return `${t.length}-${(h >>> 0).toString(36)}`; };
+            const normalizePublished = (raw) => {
+                if (!raw) return null;
+                let words = null, bookList = null;
+                if (Array.isArray(raw)) words = { ws1: raw };
+                else if (typeof raw === 'object') {
+                    if (raw.allWords && typeof raw.allWords === 'object') words = raw.allWords;
+                    else if (Array.isArray(raw.words)) words = { [raw.bookId || 'ws1']: raw.words };
+                    if (Array.isArray(raw.books)) bookList = raw.books;
+                }
+                if (!words) return null;
+                const clean = {};
+                Object.keys(words).forEach(k => { if (Array.isArray(words[k])) clean[k] = words[k].filter(w => w && w.word); });
+                if (!Object.keys(clean).length) return null;
+                const bks = (bookList || Object.keys(clean).map(id => ({ id, name: id.toUpperCase(), targetCount: 500 }))).filter(b => b && b.id);
+                return { books: bks, words: clean };
+            };
+            const fetchPublished = async () => {
+                const res = await fetch('words-data.json', { cache: 'no-cache' });   // revalidates, so a new upload is picked up
+                if (!res.ok) throw new Error(`words-data.json was not found (${res.status}).`);
+                const text = await res.text();
+                let raw;
+                try { raw = JSON.parse(text); } catch (e) { throw new Error('words-data.json is not valid JSON.'); }
+                const norm = normalizePublished(raw);
+                if (!norm) throw new Error("words-data.json was found, but its format isn't recognised.");
+                return { ...norm, sig: hashText(text) };
+            };
+            const diffPublished = (pub, lib) => {
+                const addedByBook = {};
+                let total = 0;
+                Object.keys(pub.words).forEach(bid => {
+                    const existing = (lib.allWords && lib.allWords[bid]) || [];
+                    const trash = (lib.allTrash && lib.allTrash[bid]) || [];
+                    const seen = new Set([...existing, ...trash].map(w => normalizeText(w && w.word)));
+                    const fresh = [];
+                    pub.words[bid].forEach(w => { const k = normalizeText(w.word); if (!k || seen.has(k)) return; seen.add(k); fresh.push(w); });
+                    if (fresh.length) { addedByBook[bid] = fresh; total += fresh.length; }
+                });
+                return { addedByBook, total };
+            };
+            const uniqueId = (w, taken, tag) => {
+                let id = w.id;
+                if (id == null || taken.has(id)) id = `pub_${Date.now().toString(36)}_${tag}_${Math.random().toString(36).slice(2, 8)}`;
+                taken.add(id);
+                return id;
+            };
+            const applyPublishedAdd = (pub, diff) => {
+                setBooks(prev => {
+                    const have = new Set(prev.map(b => b.id));
+                    const add = pub.books.filter(b => diff.addedByBook[b.id] && !have.has(b.id)).map(b => ({ id: b.id, name: b.name || b.id, targetCount: b.targetCount || 500 }));
+                    return add.length ? [...prev, ...add] : prev;
+                });
+                setAllWords(prev => {
+                    const next = { ...prev };
+                    Object.keys(diff.addedByBook).forEach(bid => {
+                        const list = [...(prev[bid] || [])];
+                        const taken = new Set(list.map(w => w.id));
+                        diff.addedByBook[bid].forEach((w, i) => list.push({ ...w, id: uniqueId(w, taken, `${bid}${i}`) }));
+                        next[bid] = list;
+                    });
+                    return next;
+                });
+            };
+            const runPublishedCheck = async (opts = {}) => {
+                const manual = !!opts.manual;
+                setPublishedStatus(st => ({ ...st, state: 'checking', error: '' }));
+                try {
+                    const pub = await fetchPublished();
+                    const diff = diffPublished(pub, latestLibRef.current);
+                    const publishedWords = Object.values(pub.words).reduce((a, l) => a + l.length, 0);
+                    setPublishedStatus({ state: 'ok', checkedAt: Date.now(), books: Object.keys(pub.words).length, words: publishedWords, error: '' });
+                    if (diff.total === 0) {
+                        try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); } catch (e) {}
+                        if (manual) triggerToast("You're up to date — there are no new published words. ✅");
+                        return;
+                    }
+                    const lib = latestLibRef.current;
+                    const currentTotal = Object.values(lib.allWords || {}).reduce((a, l) => a + (l ? l.length : 0), 0);
+                    let neverSynced = true;
+                    try { neverSynced = !localStorage.getItem(PUBLISHED_SIG_KEY); } catch (e) {}
+                    const looksNew = !idbHadDataRef.current && neverSynced && currentTotal <= INITIAL_WS1_WORDS.length;
+                    if (looksNew && !manual) {
+                        applyPublishedAdd(pub, diff);
+                        try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); } catch (e) {}
+                        triggerToast(`Loaded ${diff.total} published words. 🎉`);
+                        return;
+                    }
+                    setPublishedModal({ pub, diff, sig: pub.sig });
+                } catch (e) {
+                    setPublishedStatus({ state: 'error', checkedAt: Date.now(), books: 0, words: 0, error: e.message || 'Could not check for new words.' });
+                    if (manual) triggerToast(e.message || 'Could not check for new words.');
+                }
+            };
+            const confirmPublishedImport = () => {
+                if (!publishedModal) return;
+                applyPublishedAdd(publishedModal.pub, publishedModal.diff);
+                try { localStorage.setItem(PUBLISHED_SIG_KEY, publishedModal.sig); } catch (e) {}
+                triggerToast(`Imported ${publishedModal.diff.total} new words. ✅`);
+                setPublishedModal(null);
+            };
+            const resetToPublished = async () => {
+                if (!window.confirm('Reset to default?\n\n• The published books get exactly the latest published words (your own edits to those words are replaced).\n• Your own extra books and your familiarity marks are kept.\n\nContinue?')) return;
+                try {
+                    const pub = await fetchPublished();
+                    setBooks(prev => {
+                        const have = new Set(prev.map(b => b.id));
+                        const add = pub.books.filter(b => pub.words[b.id] && !have.has(b.id)).map(b => ({ id: b.id, name: b.name || b.id, targetCount: b.targetCount || 500 }));
+                        return add.length ? [...prev, ...add] : prev;
+                    });
+                    setAllWords(prev => {
+                        const next = { ...prev };
+                        Object.keys(pub.words).forEach(bid => {
+                            const taken = new Set();
+                            next[bid] = pub.words[bid].map((w, i) => ({ ...w, id: uniqueId(w, taken, `${bid}${i}`) }));
+                        });
+                        return next;
+                    });
+                    try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); } catch (e) {}
+                    setPublishedStatus({ state: 'ok', checkedAt: Date.now(), books: Object.keys(pub.words).length, words: Object.values(pub.words).reduce((a, l) => a + l.length, 0), error: '' });
+                    triggerToast('Reset to the published words. ✅');
+                } catch (e) { triggerToast(e.message || 'Could not reset to the published words.'); }
+            };
+            // run after the saved data is loaded — and, when signed in, after the cloud copy has landed
+            useEffect(() => {
+                if (!idbDataChecked || !cloudAuthReady) return;
+                if (cloudUser && cloudSyncStatus !== 'saved' && cloudSyncStatus !== 'error') return;
+                const key = cloudUser ? cloudUser.uid : 'anon';
+                if (publishedRunRef.current === key) return;
+                publishedRunRef.current = key;
+                runPublishedCheck();
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [idbDataChecked, cloudAuthReady, cloudUser && cloudUser.uid, cloudSyncStatus]);
+            // if Firebase never loads (blocked / offline), still check
+            useEffect(() => {
+                if (!idbDataChecked) return;
+                const t = setTimeout(() => { if (!publishedRunRef.current && !window.FB) { publishedRunRef.current = 'no-firebase'; runPublishedCheck(); } }, 6000);
+                return () => clearTimeout(t);
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [idbDataChecked]);
 
             const signInWithGoogle = () => {
                 if (!window.FB) return;
@@ -7973,6 +8069,26 @@ Rules:
                 triggerToast(`Exported ${currentWords.length} words from "${activeBook.name}"!`);
             };
 
+            // Export EVERY book together as one clean library file — words only (no familiarity marks, trash, XP or history).
+            // Save it as words-data.json in your GitHub repo to publish it. It downloads with that exact name.
+            const handleExportAllBooks = () => {
+                const libraryObj = {
+                    format: 'vocab-companion-library',
+                    exportDate: new Date().toISOString(),
+                    books,
+                    allWords: Object.fromEntries(books.map(b => [b.id, allWords[b.id] || []]))
+                };
+                const jsonStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(libraryObj, null, 2));
+                const downloadAnchor = document.createElement('a');
+                downloadAnchor.setAttribute("href", jsonStr);
+                downloadAnchor.setAttribute("download", "words-data.json");
+                document.body.appendChild(downloadAnchor);
+                downloadAnchor.click();
+                downloadAnchor.remove();
+                const total = books.reduce((a, b) => a + (allWords[b.id] || []).length, 0);
+                triggerToast(`Exported ${books.length} book${books.length === 1 ? '' : 's'} (${total} words) as words-data.json ✅`);
+            };
+
             // Calculate Level from XP
             const userLevel = Math.floor(userXP / 100) + 1;
 
@@ -8812,6 +8928,23 @@ Rules:
                         <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 text-sm font-medium flex items-center gap-2 animate-bounce">
                             <span>💡</span>
                             <span>{toastMessage}</span>
+                        </div>
+                    )}
+
+                    {/* BLOCKING: NEW PUBLISHED WORDS — no cancel, must import */}
+                    {publishedModal && (
+                        <div className="fixed inset-0 z-[300] bg-slate-900/85 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Import new words">
+                            <div className="bg-white text-slate-800 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 text-center">
+                                <div className="text-4xl">📥</div>
+                                <h3 className="text-xl font-black">New words are available</h3>
+                                <p className="text-sm text-slate-600 leading-relaxed"><b>{publishedModal.diff.total}</b> new word{publishedModal.diff.total === 1 ? '' : 's'} {publishedModal.diff.total === 1 ? 'was' : 'were'} added to the library. Please import {publishedModal.diff.total === 1 ? 'it' : 'them'} to keep your list up to date. Your familiarity marks, history and progress stay exactly as they are.</p>
+                                <div className="flex flex-wrap justify-center gap-1.5">
+                                    {Object.keys(publishedModal.diff.addedByBook).map(bid => (
+                                        <span key={bid} className="px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-[11px] font-bold text-indigo-700">{(publishedModal.pub.books.find(b => b.id === bid) || {}).name || bid} · +{publishedModal.diff.addedByBook[bid].length}</span>
+                                    ))}
+                                </div>
+                                <button type="button" onClick={confirmPublishedImport} className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-black shadow transition-colors active:scale-[0.99]">Import {publishedModal.diff.total} new word{publishedModal.diff.total === 1 ? '' : 's'}</button>
+                            </div>
                         </div>
                     )}
 
@@ -11717,6 +11850,25 @@ Rules:
                                 </div>
                             </div>
 
+                            {/* PUBLISHED WORD LIBRARY */}
+                            <div className={`rounded-2xl border shadow-sm p-4 space-y-3 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
+                                <div>
+                                    <h2 className="text-lg font-extrabold flex items-center gap-2"><span>📚</span> Published word library</h2>
+                                    <p className="text-[11px] mt-0.5 opacity-70">The latest words published in <b>words-data.json</b>. New words are offered to you automatically when you open the app. Your marks and history are never touched.</p>
+                                </div>
+                                <div className={`rounded-xl border px-3 py-2 text-xs font-semibold ${publishedStatus.state === 'error' ? 'border-rose-300 bg-rose-50 text-rose-700' : appTheme === 'light' ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-slate-700 bg-slate-800/50'}`}>
+                                    {publishedStatus.state === 'idle' && 'Not checked yet.'}
+                                    {publishedStatus.state === 'checking' && 'Checking…'}
+                                    {publishedStatus.state === 'ok' && `Published file: ${publishedStatus.books} book${publishedStatus.books === 1 ? '' : 's'}, ${publishedStatus.words} words · checked ${new Date(publishedStatus.checkedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`}
+                                    {publishedStatus.state === 'error' && publishedStatus.error}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <button type="button" onClick={() => runPublishedCheck({ manual: true })} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-sm">↻ Check for new words</button>
+                                    <button type="button" onClick={resetToPublished} className={`px-4 py-2 rounded-xl text-xs font-bold border ${appTheme === 'light' ? 'bg-white border-slate-300 text-slate-700 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-300' : 'border-slate-600 hover:bg-slate-700'}`}>Reset to default…</button>
+                                </div>
+                                <p className="text-[11px] opacity-60"><b>Reset to default</b> makes the published books match the published file exactly (your own edits to those words are replaced). Your own extra books and familiarity marks are kept.</p>
+                            </div>
+
                             {/* PHONE AUTO-SCROLL */}
                             <div className={`rounded-2xl border shadow-sm p-4 space-y-3 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
                                 <div>
@@ -11937,13 +12089,20 @@ Rules:
                                     <div className="w-px self-stretch bg-slate-200 hidden sm:block"></div>
 
                                     <div className="flex flex-col gap-1.5">
-                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">JSON — just "{activeBook.name}"'s words</span>
+                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">JSON — words only · "{activeBook.name}" or every book</span>
                                         <div className="flex flex-wrap gap-2">
                                             <button
                                                 onClick={handleExportJson}
                                                 className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all flex items-center gap-1.5"
                                             >
                                                 <span>📤 Export JSON</span>
+                                            </button>
+                                            <button
+                                                onClick={handleExportAllBooks}
+                                                title="One file with every book and its words (no marks or history). Save it as words-data.json in your GitHub repo."
+                                                className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all flex items-center gap-1.5"
+                                            >
+                                                <span>⬇ Export all books</span>
                                             </button>
                                             <button
                                                 onClick={() => importJsonInputRef.current?.click()}
