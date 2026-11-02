@@ -6678,6 +6678,13 @@ Rules:
             //   added; their marks, history, XP and edits are never touched. A word they deleted is not re-added.
             // • Word Manager → "Reset to default" replaces the published books with the published versions.
             const PUBLISHED_SIG_KEY = 'wordsmart_published_sig_v1';
+            // Set "forceSync": <number> in words-data.json (alongside "mirror": true) to make
+            // EVERY visitor — new or returning, signed in or not — silently get reset to the
+            // published library on their next load, no modal / no manual "Reset to default"
+            // click. Bump the number again any time you want to force another silent resync;
+            // leaving it out (or not raising it) keeps today's normal behavior (only brand-new
+            // visitors auto-load; everyone else gets the "new words available" prompt).
+            const FORCE_SYNC_KEY = 'wordsmart_force_sync_v';
             const [publishedModal, setPublishedModal] = useState(null);   // { pub, diff, sig } — blocking until imported
             const [publishedStatus, setPublishedStatus] = useState({ state: 'idle', checkedAt: 0, books: 0, words: 0, error: '' });
             const publishedRunRef = useRef('');
@@ -6700,7 +6707,9 @@ Rules:
                 const bks = (bookList || Object.keys(clean).map(id => ({ id, name: id.toUpperCase(), targetCount: 500 }))).filter(b => b && b.id);
                 const have = new Set(bks.map(b => b.id));
                 Object.keys(clean).forEach(id => { if (!have.has(id)) bks.push({ id, name: id.toUpperCase(), targetCount: 500 }); });
-                return { books: bks.filter(b => clean[b.id]), words: clean, mirror: !!(raw && !Array.isArray(raw) && raw.mirror === true) };
+                const forceSyncRaw = (raw && !Array.isArray(raw) && raw.forceSync);
+                const forceSync = Number.isFinite(forceSyncRaw) ? forceSyncRaw : 0;
+                return { books: bks.filter(b => clean[b.id]), words: clean, mirror: !!(raw && !Array.isArray(raw) && raw.mirror === true), forceSync };
             };
             const fetchPublished = async () => {
                 const res = await fetch('words-data.json', { cache: 'no-cache' });   // revalidates, so a new upload is picked up
@@ -6797,6 +6806,17 @@ Rules:
                     const mdiff = pub.mirror ? diffMirror(pub, latestLibRef.current) : null;
                     const publishedWords = Object.values(pub.words).reduce((a, l) => a + l.length, 0);
                     setPublishedStatus({ state: 'ok', checkedAt: Date.now(), books: Object.keys(pub.words).length, words: publishedWords, mirror: !!pub.mirror, error: '' });
+                    // Forced silent resync: words-data.json asked for a newer forceSync than
+                    // this browser has applied — reset to the published library right now,
+                    // for anyone (new or returning), with no modal and no click needed.
+                    let lastForced = 0;
+                    try { lastForced = Number(localStorage.getItem(FORCE_SYNC_KEY)) || 0; } catch (e) {}
+                    if (pub.mirror && pub.forceSync > lastForced) {
+                        applyMirror(pub);
+                        try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); localStorage.setItem(FORCE_SYNC_KEY, String(pub.forceSync)); } catch (e) {}
+                        triggerToast('Your word library was updated to the latest version. ✅');
+                        return;
+                    }
                     if ((pub.mirror ? mdiff.total : diff.total) === 0) {
                         try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); } catch (e) {}
                         if (manual) triggerToast("You're up to date — there are no new published words. ✅");
