@@ -6698,7 +6698,9 @@ Rules:
                 Object.keys(words).forEach(k => { if (Array.isArray(words[k])) clean[k] = words[k].filter(w => w && w.word); });
                 if (!Object.keys(clean).length) return null;
                 const bks = (bookList || Object.keys(clean).map(id => ({ id, name: id.toUpperCase(), targetCount: 500 }))).filter(b => b && b.id);
-                return { books: bks, words: clean };
+                const have = new Set(bks.map(b => b.id));
+                Object.keys(clean).forEach(id => { if (!have.has(id)) bks.push({ id, name: id.toUpperCase(), targetCount: 500 }); });
+                return { books: bks.filter(b => clean[b.id]), words: clean, mirror: !!(raw && !Array.isArray(raw) && raw.mirror === true) };
             };
             const fetchPublished = async () => {
                 const res = await fetch('words-data.json', { cache: 'no-cache' });   // revalidates, so a new upload is picked up
@@ -6729,6 +6731,46 @@ Rules:
                 taken.add(id);
                 return id;
             };
+            // MIRROR MODE: the library must match the published file exactly.
+            const wordFingerprint = (w) => JSON.stringify(w, (k, v) => (k === 'id' ? undefined : v));
+            const diffMirror = (pub, lib) => {
+                const pubIds = new Set(Object.keys(pub.words));
+                const removedBooks = (lib.books || []).filter(b => !pubIds.has(b.id)).map(b => ({ id: b.id, name: b.name || b.id, count: ((lib.allWords && lib.allWords[b.id]) || []).length }));
+                let added = 0, updated = 0, removedWords = 0;
+                Object.keys(pub.words).forEach(bid => {
+                    const ex = (lib.allWords && lib.allWords[bid]) || [];
+                    const exMap = new Map(ex.map(w => [normalizeText(w && w.word), w]));
+                    const keys = new Set();
+                    pub.words[bid].forEach(w => {
+                        const k = normalizeText(w.word);
+                        keys.add(k);
+                        const u = exMap.get(k);
+                        if (!u) added += 1; else if (wordFingerprint(u) !== wordFingerprint(w)) updated += 1;
+                    });
+                    ex.forEach(w => { if (!keys.has(normalizeText(w && w.word))) removedWords += 1; });
+                });
+                return { added, updated, removedWords, removedBooks, total: added + updated + removedWords + removedBooks.length };
+            };
+            const applyMirror = (pub) => {
+                const keepIds = pub.books.map(b => b.id);
+                setBooks(pub.books.map(b => ({ id: b.id, name: b.name || b.id, targetCount: b.targetCount || 500 })));
+                setAllWords(prev => {
+                    const next = {};
+                    pub.books.forEach(b => {
+                        const ex = prev[b.id] || [];
+                        const exMap = new Map(ex.map(w => [normalizeText(w && w.word), w]));
+                        const taken = new Set();
+                        // a word the person already has keeps their id, so its familiarity mark stays
+                        next[b.id] = (pub.words[b.id] || []).map((w, i) => {
+                            const u = exMap.get(normalizeText(w.word));
+                            return { ...w, id: uniqueId({ id: u ? u.id : w.id }, taken, `${b.id}${i}`) };
+                        });
+                    });
+                    return next;
+                });
+                setAllTrash(prev => { const next = {}; keepIds.forEach(id => { if (prev && prev[id]) next[id] = prev[id]; }); return next; });
+                if (!keepIds.includes(selectedBookId) && keepIds.length) setSelectedBookId(keepIds[0]);
+            };
             const applyPublishedAdd = (pub, diff) => {
                 setBooks(prev => {
                     const have = new Set(prev.map(b => b.id));
@@ -6752,9 +6794,10 @@ Rules:
                 try {
                     const pub = await fetchPublished();
                     const diff = diffPublished(pub, latestLibRef.current);
+                    const mdiff = pub.mirror ? diffMirror(pub, latestLibRef.current) : null;
                     const publishedWords = Object.values(pub.words).reduce((a, l) => a + l.length, 0);
-                    setPublishedStatus({ state: 'ok', checkedAt: Date.now(), books: Object.keys(pub.words).length, words: publishedWords, error: '' });
-                    if (diff.total === 0) {
+                    setPublishedStatus({ state: 'ok', checkedAt: Date.now(), books: Object.keys(pub.words).length, words: publishedWords, mirror: !!pub.mirror, error: '' });
+                    if ((pub.mirror ? mdiff.total : diff.total) === 0) {
                         try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); } catch (e) {}
                         if (manual) triggerToast("You're up to date — there are no new published words. ✅");
                         return;
@@ -6765,12 +6808,12 @@ Rules:
                     try { neverSynced = !localStorage.getItem(PUBLISHED_SIG_KEY); } catch (e) {}
                     const looksNew = !idbHadDataRef.current && neverSynced && currentTotal <= INITIAL_WS1_WORDS.length;
                     if (looksNew && !manual) {
-                        applyPublishedAdd(pub, diff);
+                        if (pub.mirror) applyMirror(pub); else applyPublishedAdd(pub, diff);
                         try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); } catch (e) {}
                         triggerToast(`Loaded ${diff.total} published words. 🎉`);
                         return;
                     }
-                    setPublishedModal({ pub, diff, sig: pub.sig });
+                    setPublishedModal({ pub, diff, mdiff, mirror: !!pub.mirror, sig: pub.sig });
                 } catch (e) {
                     setPublishedStatus({ state: 'error', checkedAt: Date.now(), books: 0, words: 0, error: e.message || 'Could not check for new words.' });
                     if (manual) triggerToast(e.message || 'Could not check for new words.');
@@ -6778,32 +6821,20 @@ Rules:
             };
             const confirmPublishedImport = () => {
                 if (!publishedModal) return;
-                applyPublishedAdd(publishedModal.pub, publishedModal.diff);
+                if (publishedModal.mirror) applyMirror(publishedModal.pub); else applyPublishedAdd(publishedModal.pub, publishedModal.diff);
                 try { localStorage.setItem(PUBLISHED_SIG_KEY, publishedModal.sig); } catch (e) {}
-                triggerToast(`Imported ${publishedModal.diff.total} new words. ✅`);
+                triggerToast(publishedModal.mirror ? 'Your library is now up to date. ✅' : `Imported ${publishedModal.diff.total} new words. ✅`);
                 setPublishedModal(null);
             };
             const resetToPublished = async () => {
-                if (!window.confirm('Reset to default?\n\n• The published books get exactly the latest published words (your own edits to those words are replaced).\n• Your own extra books and your familiarity marks are kept.\n\nContinue?')) return;
+                if (!window.confirm('Reset to default?\n\nYour library will match the published library exactly:\n• books and words that are not in it are removed\n• the published words replace your versions (your own edits to them are lost)\n• your familiarity marks for the words that stay are kept\n\nContinue?')) return;
                 try {
                     const pub = await fetchPublished();
-                    setBooks(prev => {
-                        const have = new Set(prev.map(b => b.id));
-                        const add = pub.books.filter(b => pub.words[b.id] && !have.has(b.id)).map(b => ({ id: b.id, name: b.name || b.id, targetCount: b.targetCount || 500 }));
-                        return add.length ? [...prev, ...add] : prev;
-                    });
-                    setAllWords(prev => {
-                        const next = { ...prev };
-                        Object.keys(pub.words).forEach(bid => {
-                            const taken = new Set();
-                            next[bid] = pub.words[bid].map((w, i) => ({ ...w, id: uniqueId(w, taken, `${bid}${i}`) }));
-                        });
-                        return next;
-                    });
+                    applyMirror(pub);
                     try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); } catch (e) {}
-                    setPublishedStatus({ state: 'ok', checkedAt: Date.now(), books: Object.keys(pub.words).length, words: Object.values(pub.words).reduce((a, l) => a + l.length, 0), error: '' });
-                    triggerToast('Reset to the published words. ✅');
-                } catch (e) { triggerToast(e.message || 'Could not reset to the published words.'); }
+                    setPublishedStatus({ state: 'ok', checkedAt: Date.now(), books: Object.keys(pub.words).length, words: Object.values(pub.words).reduce((a, l) => a + l.length, 0), mirror: !!pub.mirror, error: '' });
+                    triggerToast('Reset to the published library. ✅');
+                } catch (e) { triggerToast(e.message || 'Could not reset to the published library.'); }
             };
             // run after the saved data is loaded — and, when signed in, after the cloud copy has landed
             useEffect(() => {
@@ -8074,6 +8105,7 @@ Rules:
             const handleExportAllBooks = () => {
                 const libraryObj = {
                     format: 'vocab-companion-library',
+                    mirror: true,          // true = readers' libraries are made to match this file exactly (set to false to only ADD new words)
                     exportDate: new Date().toISOString(),
                     books,
                     allWords: Object.fromEntries(books.map(b => [b.id, allWords[b.id] || []]))
@@ -8936,14 +8968,29 @@ Rules:
                         <div className="fixed inset-0 z-[300] bg-slate-900/85 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Import new words">
                             <div className="bg-white text-slate-800 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 text-center">
                                 <div className="text-4xl">📥</div>
-                                <h3 className="text-xl font-black">New words are available</h3>
-                                <p className="text-sm text-slate-600 leading-relaxed"><b>{publishedModal.diff.total}</b> new word{publishedModal.diff.total === 1 ? '' : 's'} {publishedModal.diff.total === 1 ? 'was' : 'were'} added to the library. Please import {publishedModal.diff.total === 1 ? 'it' : 'them'} to keep your list up to date. Your familiarity marks, history and progress stay exactly as they are.</p>
-                                <div className="flex flex-wrap justify-center gap-1.5">
-                                    {Object.keys(publishedModal.diff.addedByBook).map(bid => (
-                                        <span key={bid} className="px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-[11px] font-bold text-indigo-700">{(publishedModal.pub.books.find(b => b.id === bid) || {}).name || bid} · +{publishedModal.diff.addedByBook[bid].length}</span>
-                                    ))}
-                                </div>
-                                <button type="button" onClick={confirmPublishedImport} className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-black shadow transition-colors active:scale-[0.99]">Import {publishedModal.diff.total} new word{publishedModal.diff.total === 1 ? '' : 's'}</button>
+                                <h3 className="text-xl font-black">{publishedModal.mirror ? 'Your library has an update' : 'New words are available'}</h3>
+                                {publishedModal.mirror ? (
+                                    <React.Fragment>
+                                        <p className="text-sm text-slate-600 leading-relaxed">The word library was updated. Please update yours so it matches. Your familiarity marks and history for the words that stay are kept.</p>
+                                        <div className="flex flex-wrap justify-center gap-1.5">
+                                            {publishedModal.mdiff.added > 0 && <span className="px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-700">+{publishedModal.mdiff.added} new</span>}
+                                            {publishedModal.mdiff.updated > 0 && <span className="px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-[11px] font-bold text-indigo-700">{publishedModal.mdiff.updated} updated</span>}
+                                            {publishedModal.mdiff.removedWords > 0 && <span className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-700">−{publishedModal.mdiff.removedWords} words removed</span>}
+                                            {publishedModal.mdiff.removedBooks.map(b => <span key={b.id} className="px-2.5 py-1 rounded-full bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-700">Book “{b.name}” removed ({b.count})</span>)}
+                                        </div>
+                                        {(publishedModal.mdiff.removedWords > 0 || publishedModal.mdiff.removedBooks.length > 0) && <p className="text-[11px] text-slate-500">Books and words that are not in the published library are removed from your list.</p>}
+                                    </React.Fragment>
+                                ) : (
+                                    <React.Fragment>
+                                        <p className="text-sm text-slate-600 leading-relaxed"><b>{publishedModal.diff.total}</b> new word{publishedModal.diff.total === 1 ? '' : 's'} {publishedModal.diff.total === 1 ? 'was' : 'were'} added to the library. Please import {publishedModal.diff.total === 1 ? 'it' : 'them'} to keep your list up to date. Your familiarity marks, history and progress stay exactly as they are.</p>
+                                        <div className="flex flex-wrap justify-center gap-1.5">
+                                            {Object.keys(publishedModal.diff.addedByBook).map(bid => (
+                                                <span key={bid} className="px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-[11px] font-bold text-indigo-700">{(publishedModal.pub.books.find(b => b.id === bid) || {}).name || bid} · +{publishedModal.diff.addedByBook[bid].length}</span>
+                                            ))}
+                                        </div>
+                                    </React.Fragment>
+                                )}
+                                <button type="button" onClick={confirmPublishedImport} className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-black shadow transition-colors active:scale-[0.99]">{publishedModal.mirror ? 'Update my library' : `Import ${publishedModal.diff.total} new word${publishedModal.diff.total === 1 ? '' : 's'}`}</button>
                             </div>
                         </div>
                     )}
@@ -11859,14 +11906,14 @@ Rules:
                                 <div className={`rounded-xl border px-3 py-2 text-xs font-semibold ${publishedStatus.state === 'error' ? 'border-rose-300 bg-rose-50 text-rose-700' : appTheme === 'light' ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-slate-700 bg-slate-800/50'}`}>
                                     {publishedStatus.state === 'idle' && 'Not checked yet.'}
                                     {publishedStatus.state === 'checking' && 'Checking…'}
-                                    {publishedStatus.state === 'ok' && `Published file: ${publishedStatus.books} book${publishedStatus.books === 1 ? '' : 's'}, ${publishedStatus.words} words · checked ${new Date(publishedStatus.checkedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`}
+                                    {publishedStatus.state === 'ok' && `Published file: ${publishedStatus.books} book${publishedStatus.books === 1 ? '' : 's'}, ${publishedStatus.words} words${publishedStatus.mirror ? ' · keeps your library identical to it' : ' · adds new words only'} · checked ${new Date(publishedStatus.checkedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`}
                                     {publishedStatus.state === 'error' && publishedStatus.error}
                                 </div>
                                 <div className="flex flex-wrap gap-2">
                                     <button type="button" onClick={() => runPublishedCheck({ manual: true })} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-sm">↻ Check for new words</button>
                                     <button type="button" onClick={resetToPublished} className={`px-4 py-2 rounded-xl text-xs font-bold border ${appTheme === 'light' ? 'bg-white border-slate-300 text-slate-700 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-300' : 'border-slate-600 hover:bg-slate-700'}`}>Reset to default…</button>
                                 </div>
-                                <p className="text-[11px] opacity-60"><b>Reset to default</b> makes the published books match the published file exactly (your own edits to those words are replaced). Your own extra books and familiarity marks are kept.</p>
+                                <p className="text-[11px] opacity-60"><b>Reset to default</b> makes your library match the published file exactly — books and words that are not in it are removed and your edits to published words are replaced. Familiarity marks of the words that stay are kept.</p>
                             </div>
 
                             {/* PHONE AUTO-SCROLL */}
