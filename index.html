@@ -537,17 +537,23 @@
         // also want every user's word books reset to the published words-data.json at that moment
         // (their Accept click does it — works even if words-data.json has no "mirror"/"forceSync").
         const APP_UPDATE = {
-            id: 'v2026.11-a',
+            id: 'v2026.11-b',
+            at: Date.parse('2026-11-03T12:00:00Z'),   // shown in the 🔔 bell too
             title: "What's new",
+            // The library reset is ONE-TIME per signed-in user: it only runs for people who have not already
+            // accepted it (the earlier notice 'v2026.11-a', or this one). Signed-out users never get the reset.
             resetLibrary: true,
+            resetDoneIds: ['v2026.11-a'],
             items: [
-                '🔄 Your word books are refreshed to the latest published library. Your familiarity marks and history for the words that stay are kept.',
-                '↔️ Word List: swipe the word card left/right (or tap Prev / Next) to move to the next or previous word.',
-                '🔔 💬 Notification bell and messages icon in the header — invites, pokes, challenges and chats in one place.',
-                '🌐 Multiplayer: rooms, challenges, pokes and chat, with a cleaner word picker that shows full synonyms and antonyms.',
-                '🧠 Practice Quiz & Word Quest: review the words you got wrong, see your quiz history, and try reverse mode.'
+                '📚 New visitors now start with exactly the published library — no extra empty books.',
+                '📱 Multiplayer on phones: player names are fully visible; invite, poke, chat and challenge are now compact icon buttons.',
+                '🟢 Multiplayer: accurate online status, plus “last seen” time for players who are away.',
+                '⚙️ Word Manager: the “visible in players list” switch now lives in Settings, and “Prompt template” was removed from Data management.',
+                '📖 Books: the “Target word count” field is gone — a book simply shows its real word total.'
             ]
         };
+        const RESET_DONE_KEY = 'wordsmart_lib_reset_done';
+        const libResetAlreadyDone = () => { try { return localStorage.getItem(RESET_DONE_KEY) === '1' || APP_UPDATE.resetDoneIds.includes(localStorage.getItem('wordsmart_update_seen')); } catch (e) { return false; } };
         const UPDATE_SEEN_KEY = 'wordsmart_update_seen';
 
         const DEFAULT_SHORTCUTS = {
@@ -4638,14 +4644,23 @@
             }, [fbReady, uid, conn]);
             const pokeCooldownRef = useRef({});
             const isPublic = !!(uid && usersMap[uid]);
-            // keep my directory entry fresh + online dot correct
+            // keep my directory name/photo fresh (online status itself is handled app-wide, see "PRESENCE" in App)
             useEffect(() => {
                 if (!isPublic || !conn || !rtdb) return;
-                const pr = rr(`users/${uid}/online`);
-                FB.dbOnDisconnect(pr).set(false).catch(() => {});
-                FB.dbUpdate(rr(`users/${uid}`), { online: true, lastSeen: Date.now(), name: myName, photo: myPhoto }).catch(() => {});
-                return () => { try { FB.dbOnDisconnect(pr).cancel().catch(() => {}); } catch (e) {} };
+                FB.dbUpdate(rr(`users/${uid}`), { name: myName, photo: myPhoto }).catch(() => {});
             }, [isPublic, conn, uid, myName, myPhoto]);
+            // re-render every 30s so "online" / "last seen" stay accurate
+            const [, setPresenceTick] = useState(0);
+            useEffect(() => { const t = setInterval(() => setPresenceTick(x => x + 1), 30000); return () => clearInterval(t); }, []);
+            const isOnlineNow = (u) => !!(u && u.online && (serverNow() - (u.lastSeen || 0)) < 100000);
+            const lastSeenText = (u) => {
+                if (!u || !u.lastSeen) return 'Offline';
+                const sec = Math.max(0, Math.floor((serverNow() - u.lastSeen) / 1000));
+                if (sec < 90) return 'Last seen just now';
+                if (sec < 3600) return `Last seen ${Math.floor(sec / 60)}m ago`;
+                if (sec < 86400) return `Last seen ${Math.floor(sec / 3600)}h ago`;
+                return `Last seen ${Math.floor(sec / 86400)}d ago`;
+            };
 
             const leaveLocal = () => {
                 try { sessionStorage.removeItem('wordsmart_mp_room'); } catch (e) {}
@@ -4883,17 +4898,6 @@
             if (!roomCode) {
                 const liveInvites = Object.entries(invites || {}).map(([id, v]) => ({ id, ...v })).filter(v => v && v.code && Date.now() - (v.at || 0) < 30 * 60 * 1000);
                 const usersList = Object.entries(usersMap || {}).map(([id, u]) => ({ id, ...u }));
-                const joinCta = isPublic ? (
-                    <div className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs">
-                        <span className="font-bold text-emerald-700">✅ You're visible in the players list — others can find and invite you.</span>
-                        <button onClick={leavePublic} className="underline text-emerald-700/70 font-bold shrink-0">Hide me</button>
-                    </div>
-                ) : (
-                    <div className="rounded-xl bg-indigo-50 border border-indigo-200 px-3 py-3 text-xs flex items-center justify-between gap-3 flex-wrap">
-                        <span className="font-semibold text-indigo-800">You're hidden right now. Show yourself to appear in the players list, earn leaderboard points and receive invites. Only your name and photo are shared.</span>
-                        <button onClick={goPublic} className="px-4 py-2 rounded-lg bg-indigo-600 text-white font-bold hover:bg-indigo-700">Show me again</button>
-                    </div>
-                );
                 const perPlayer = mode === 'swap' ? `Each player puts in ${wordCount} words; with 4 players that's ${wordCount * 3} questions each.` : `${wordCount} questions, same for everybody.`;
                 return shell(<>{header}
                     {connWaited && !conn && (
@@ -4924,31 +4928,31 @@
                     {view === 'players' && (
                         <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
                             <div className="flex items-center gap-2 flex-wrap">
-                                <h3 className="text-sm font-black text-slate-800 mr-auto">👥 Public players <span className="text-slate-400 font-bold">· {usersList.length} registered · {usersList.filter(u => u.online).length} online</span></h3>
+                                <h3 className="text-sm font-black text-slate-800 mr-auto">👥 Public players <span className="text-slate-400 font-bold">· {usersList.length} registered · {usersList.filter(isOnlineNow).length} online</span></h3>
                                 <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search players…" className="px-3 py-2 rounded-lg border border-slate-300 text-xs w-44" />
                             </div>
-                            {joinCta}
                             {!roomCode && <p className="text-[11px] text-slate-400">To invite someone, create a room first — the room lobby then shows an Invite list. You can 👋 poke anyone any time.</p>}
                             <div className="divide-y divide-slate-100 max-h-[32rem] overflow-y-auto">
                                 {usersList.filter(u => !userSearch.trim() || String(u.name || '').toLowerCase().includes(userSearch.trim().toLowerCase()))
-                                    .sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0) || (b.points || 0) - (a.points || 0)).map(u => (
-                                    <div key={u.id} className="flex items-center gap-3 py-2.5">
-                                        <div className="relative"><MpAvatar name={u.name} photo={u.photo} /><span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${u.online ? 'bg-emerald-500' : 'bg-slate-300'}`} /></div>
+                                    .sort((a, b) => (isOnlineNow(b) ? 1 : 0) - (isOnlineNow(a) ? 1 : 0) || (b.points || 0) - (a.points || 0)).map(u => (
+                                    <div key={u.id} className="flex items-center gap-2 sm:gap-3 py-2.5">
+                                        <div className="relative shrink-0"><MpAvatar name={u.name} photo={u.photo} /><span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${(u.id === uid || isOnlineNow(u)) ? 'bg-emerald-500' : 'bg-slate-300'}`} /></div>
                                         <div className="flex-1 min-w-0">
                                             <div className="text-sm font-extrabold text-slate-800 truncate">{u.name}{u.id === uid ? ' (you)' : ''}</div>
+                                            <div className={`text-[11px] font-bold ${(u.id === uid || isOnlineNow(u)) ? 'text-emerald-600' : 'text-slate-400'}`}>{(u.id === uid || isOnlineNow(u)) ? '● Online now' : lastSeenText(u)}</div>
                                             <div className="text-[11px] font-semibold text-slate-400">{u.points || 0} pts · {u.wins || 0}W {u.losses || 0}L · {u.played || 0} played</div>
                                         </div>
                                         {u.id !== uid && (
-                                            <button onClick={() => sendInvite(u)} disabled={!roomCode} title={roomCode ? 'Invite to my room' : 'Create a room first'} className="px-3 py-1.5 rounded-lg bg-indigo-100 text-indigo-700 text-xs font-bold hover:bg-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed">✉ Invite</button>
+                                            <button onClick={() => sendInvite(u)} disabled={!roomCode} title={roomCode ? 'Invite to my room' : 'Create a room first'} className="px-2 sm:px-3 py-1.5 shrink-0 rounded-lg bg-indigo-100 text-indigo-700 text-xs font-bold hover:bg-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed"><span aria-hidden="true">✉</span><span className="hidden sm:inline"> Invite</span></button>
                                         )}
                                         {u.id !== uid && (
-                                            <button onClick={() => sendPoke(u)} title="Nudge them to study" className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-700 text-xs font-bold hover:bg-amber-200">👋 Poke</button>
+                                            <button onClick={() => sendPoke(u)} title="Nudge them to study" className="px-2 sm:px-3 py-1.5 shrink-0 rounded-lg bg-amber-100 text-amber-700 text-xs font-bold hover:bg-amber-200"><span aria-hidden="true">👋</span><span className="hidden sm:inline"> Poke</span></button>
                                         )}
                                         {u.id !== uid && (
-                                            <button onClick={() => setChatWith({ id: u.id, name: u.name, photo: u.photo })} title="Send a short message" className="px-3 py-1.5 rounded-lg bg-sky-100 text-sky-700 text-xs font-bold hover:bg-sky-200">💬 Chat</button>
+                                            <button onClick={() => setChatWith({ id: u.id, name: u.name, photo: u.photo })} title="Send a short message" className="px-2 sm:px-3 py-1.5 shrink-0 rounded-lg bg-sky-100 text-sky-700 text-xs font-bold hover:bg-sky-200"><span aria-hidden="true">💬</span><span className="hidden sm:inline"> Chat</span></button>
                                         )}
                                         {u.id !== uid && (
-                                            <button onClick={() => { setChallengeTarget({ id: u.id, name: u.name, photo: u.photo }); setView('challenges'); }} title="Challenge to an exam (no need to be online together)" className="px-3 py-1.5 rounded-lg bg-rose-100 text-rose-700 text-xs font-bold hover:bg-rose-200">⚔️ Challenge</button>
+                                            <button onClick={() => { setChallengeTarget({ id: u.id, name: u.name, photo: u.photo }); setView('challenges'); }} title="Challenge to an exam (no need to be online together)" className="px-2 sm:px-3 py-1.5 shrink-0 rounded-lg bg-rose-100 text-rose-700 text-xs font-bold hover:bg-rose-200"><span aria-hidden="true">⚔️</span><span className="hidden sm:inline"> Challenge</span></button>
                                         )}
                                     </div>
                                 ))}
@@ -4962,7 +4966,6 @@
                         return (
                             <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
                                 <h3 className="text-sm font-black text-slate-800">🏆 Leaderboard <span className="text-slate-400 font-bold">· points from multiplayer games (10 per correct answer, +30 win bonus)</span></h3>
-                                {joinCta}
                                 <div className="divide-y divide-slate-100 max-h-[32rem] overflow-y-auto">
                                     {ranked.slice(0, 50).map((u, i) => (
                                         <div key={u.id} className={`flex items-center gap-3 py-2.5 px-2 rounded-lg ${u.id === uid ? 'bg-indigo-50' : ''}`}>
@@ -6556,14 +6559,15 @@ Rules:
                 Object.entries(notifInvites).forEach(([fromUid, v]) => rows.push({ type: 'invite', key: `inv-${fromUid}`, fromUid, at: v.at || 0, v }));
                 Object.entries(notifPokes).forEach(([fromUid, v]) => rows.push({ type: 'poke', key: `poke-${fromUid}`, fromUid, at: v.at || 0, v }));
                 notifChallengeItems.forEach(ci => rows.push({ type: 'challenge', key: ci.key, at: ci.at, ci }));
+                rows.push({ type: 'whatsnew', key: `whatsnew-${APP_UPDATE.id}`, at: APP_UPDATE.at || 0 });
                 return rows.sort((x, y) => y.at - x.at);
             }, [notifInvites, notifPokes, notifChallengeItems]);
-            const isNotifUnread = (row, base) => row.type === 'challenge' ? !base.keys.includes(row.key) : row.at > base.at;
+            const isNotifUnread = (row, base) => (row.type === 'challenge' || row.type === 'whatsnew') ? !base.keys.includes(row.key) : row.at > base.at;
             const notifTotalCount = notifRows.filter(r => isNotifUnread(r, notifSeen)).length;   // the red badge
             const markNotifsSeen = () => {
                 let at = Date.now();
-                notifRows.forEach(r => { if (r.type !== 'challenge' && r.at > at) at = r.at; });
-                const next = { at, keys: notifChallengeItems.map(i => i.key) };
+                notifRows.forEach(r => { if (r.type !== 'challenge' && r.type !== 'whatsnew' && r.at > at) at = r.at; });
+                const next = { at, keys: [...notifChallengeItems.map(i => i.key), `whatsnew-${APP_UPDATE.id}`] };
                 setNotifSeen(next);
                 if (notifSeenKey) { try { localStorage.setItem(notifSeenKey, JSON.stringify(next)); } catch (e) {} }
             };
@@ -6652,6 +6656,62 @@ Rules:
             // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [notifFbReady, cloudUser && cloudUser.uid]);
 
+            // PRESENCE + "visible in the players list" (app-wide, so online/last-seen is right on every tab).
+            // While you are listed: online=true with a 30s heartbeat only while this tab is visible; going to the
+            // background / closing the tab / losing connection flips online=false (lastSeen = last heartbeat).
+            const [mpListed, setMpListed] = useState(null);
+            useEffect(() => {
+                if (!notifFbReady || !window.FB || !window.FB.rtdb || !cloudUser) { setMpListed(null); return; }
+                const F = window.FB;
+                const u = F.dbOnValue(F.dbRef(F.rtdb, `users/${cloudUser.uid}`), (snap) => setMpListed(snap.exists()), () => {});
+                return () => u();
+            }, [notifFbReady, cloudUser && cloudUser.uid]);
+            useEffect(() => {
+                if (!mpListed || !notifFbReady || !window.FB || !window.FB.rtdb || !cloudUser) return;
+                const F = window.FB;
+                const userRef = F.dbRef(F.rtdb, `users/${cloudUser.uid}`);
+                const onlineRef = F.dbRef(F.rtdb, `users/${cloudUser.uid}/online`);
+                let connected = false, offset = 0;
+                const beat = (on) => { if (!connected) return; F.dbUpdate(userRef, { online: on, lastSeen: Date.now() + offset }).catch(() => {}); };
+                const u1 = F.dbOnValue(F.dbRef(F.rtdb, '.info/serverTimeOffset'), (s) => { offset = s.val() || 0; });
+                const u2 = F.dbOnValue(F.dbRef(F.rtdb, '.info/connected'), (s) => {
+                    connected = !!s.val();
+                    if (connected) {
+                        F.dbOnDisconnect(onlineRef).set(false).catch(() => {});
+                        beat(document.visibilityState === 'visible');
+                    }
+                });
+                const iv = setInterval(() => { if (document.visibilityState === 'visible') beat(true); }, 30000);
+                const onVis = () => beat(document.visibilityState === 'visible');
+                document.addEventListener('visibilitychange', onVis);
+                return () => {
+                    clearInterval(iv); document.removeEventListener('visibilitychange', onVis); u1(); u2();
+                    try { F.dbOnDisconnect(onlineRef).cancel().catch(() => {}); } catch (e) {}
+                    F.dbUpdate(userRef, { online: false, lastSeen: Date.now() + offset }).catch(() => {});
+                };
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [mpListed, notifFbReady, cloudUser && cloudUser.uid]);
+            const setListedVisible = async (show) => {
+                if (!window.FB || !window.FB.rtdb || !cloudUser) return;
+                const F = window.FB; const uid = cloudUser.uid;
+                try {
+                    if (show) {
+                        const name = ((nickname || '').trim() || cloudUser.displayName || 'Player').slice(0, 24);
+                        const photo = (cloudUser.photoURL && cloudUser.photoURL.length <= 480) ? cloudUser.photoURL : '';
+                        const ref = F.dbRef(F.rtdb, `users/${uid}`);
+                        const snap = await F.dbGet(ref);
+                        if (snap.exists()) await F.dbUpdate(ref, { name, photo, online: true, lastSeen: Date.now() });
+                        else await F.dbSet(ref, { name, photo, online: true, lastSeen: Date.now(), points: 0, played: 0, wins: 0, losses: 0, joinedAt: Date.now() });
+                        try { localStorage.removeItem(`wordsmart_mp_hidden_${uid}`); } catch (e) {}
+                        triggerToast('You are now visible in the players list.');
+                    } else {
+                        try { localStorage.setItem(`wordsmart_mp_hidden_${uid}`, '1'); } catch (e) {}
+                        await F.dbRemove(F.dbRef(F.rtdb, `users/${uid}`));
+                        triggerToast('You are hidden from the players list.');
+                    }
+                } catch (e) { console.error(e); triggerToast('Could not change that setting. Check your connection and try again.'); }
+            };
+
             // What to actually display as "the user's name" anywhere in the app.
             const displayName = nickname.trim() || cloudUser?.displayName || (cloudUser?.email ? cloudUser.email.split('@')[0] : 'Guest');
             // true for the brief moment we're writing a just-downloaded cloud
@@ -6709,6 +6769,7 @@ Rules:
             const publishedRunRef = useRef('');
             const updatePendingRef = useRef((() => { try { return localStorage.getItem(UPDATE_SEEN_KEY) !== APP_UPDATE.id; } catch (e) { return true; } })());
             const [updateNotice, setUpdateNotice] = useState(false);
+            const wantsLibReset = () => APP_UPDATE.resetLibrary && !!cloudUser && !libResetAlreadyDone();
             const [updateBusy, setUpdateBusy] = useState(false);
             const [updateErr, setUpdateErr] = useState('');
             const latestLibRef = useRef({});
@@ -6840,7 +6901,13 @@ Rules:
                         triggerToast('Your word library was updated to the latest version. ✅');
                         return;
                     }
-                    if ((pub.mirror ? mdiff.total : diff.total) === 0) {
+                    const isBrandNew = (() => {
+                        const l = latestLibRef.current;
+                        const tot = Object.values(l.allWords || {}).reduce((a, x) => a + (x ? x.length : 0), 0);
+                        let never = true; try { never = !localStorage.getItem(PUBLISHED_SIG_KEY); } catch (e) {}
+                        return !idbHadDataRef.current && never && tot <= INITIAL_WS1_WORDS.length;
+                    })();
+                    if ((pub.mirror ? mdiff.total : diff.total) === 0 && !(isBrandNew && !manual)) {
                         try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); } catch (e) {}
                         if (manual) triggerToast("You're up to date — there are no new published words. ✅");
                         return;
@@ -6851,13 +6918,13 @@ Rules:
                     try { neverSynced = !localStorage.getItem(PUBLISHED_SIG_KEY); } catch (e) {}
                     const looksNew = !idbHadDataRef.current && neverSynced && currentTotal <= INITIAL_WS1_WORDS.length;
                     if (looksNew && !manual) {
-                        if (pub.mirror) applyMirror(pub); else applyPublishedAdd(pub, diff);
-                        try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); localStorage.setItem(UPDATE_SEEN_KEY, APP_UPDATE.id); } catch (e) {}
+                        applyMirror(pub);   // brand-new visitor: exactly the published books, nothing else
+                        try { localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig); localStorage.setItem(UPDATE_SEEN_KEY, APP_UPDATE.id); localStorage.setItem(RESET_DONE_KEY, '1'); } catch (e) {}
                         updatePendingRef.current = false; setUpdateNotice(false);
-                        triggerToast(`Loaded ${diff.total} published words. 🎉`);
+                        triggerToast(`Loaded ${Object.values(pub.words).reduce((a, l) => a + l.length, 0)} published words. 🎉`);
                         return;
                     }
-                    if (updatePendingRef.current && APP_UPDATE.resetLibrary && !manual) return;   // the What's-new notice resets the library instead
+                    if (updatePendingRef.current && wantsLibReset() && !manual) return;   // the What's-new notice resets the library instead
                     setPublishedModal({ pub, diff, mdiff, mirror: !!pub.mirror, sig: pub.sig });
                 } catch (e) {
                     setPublishedStatus({ state: 'error', checkedAt: Date.now(), books: 0, words: 0, error: e.message || 'Could not check for new words.' });
@@ -6910,7 +6977,8 @@ Rules:
             const acceptAppUpdate = async () => {
                 if (updateBusy) return;
                 setUpdateErr('');
-                if (APP_UPDATE.resetLibrary) {
+                const doReset = wantsLibReset();
+                if (doReset) {
                     setUpdateBusy(true);
                     try {
                         const pub = await fetchPublished();
@@ -6918,6 +6986,7 @@ Rules:
                         try {
                             localStorage.setItem(PUBLISHED_SIG_KEY, pub.sig);
                             if (pub.forceSync) localStorage.setItem(FORCE_SYNC_KEY, String(pub.forceSync));
+                            localStorage.setItem(RESET_DONE_KEY, '1');
                         } catch (e) {}
                         setPublishedStatus({ state: 'ok', checkedAt: Date.now(), books: Object.keys(pub.words).length, words: Object.values(pub.words).reduce((a, l) => a + l.length, 0), mirror: !!pub.mirror, error: '' });
                     } catch (e) {
@@ -6930,7 +6999,7 @@ Rules:
                 updatePendingRef.current = false;
                 setUpdateBusy(false);
                 setUpdateNotice(false);
-                triggerToast(APP_UPDATE.resetLibrary ? 'Your library is up to date. ✅' : 'Thanks! ✅');
+                triggerToast(doReset ? 'Your library is up to date. ✅' : 'Thanks! ✅');
             };
 
             const signInWithGoogle = () => {
@@ -7203,8 +7272,7 @@ Rules:
                 const newId = 'page_' + Date.now();
                 const newBook = {
                     id: newId,
-                    name: newPageName.trim(),
-                    targetCount: parseInt(newPageTarget) || 500
+                    name: newPageName.trim()
                 };
 
                 setBooks(prev => [...prev, newBook]);
@@ -7225,8 +7293,7 @@ Rules:
                 if (!editingPageObj || !editingPageObj.name.trim()) return;
                 setBooks(prev => prev.map(b => b.id === editingPageObj.id ? {
                     ...b,
-                    name: editingPageObj.name.trim(),
-                    targetCount: parseInt(editingPageObj.targetCount) || 500
+                    name: editingPageObj.name.trim()
                 } : b));
                 triggerToast(`Updated page details to "${editingPageObj.name}"!`);
                 setEditingPageObj(null);
@@ -8881,6 +8948,17 @@ Rules:
                                                         {ago}
                                                     </div>
                                                 );
+                                                if (r.type === 'whatsnew') return (
+                                                    <div key={r.key} className={rowCls}>
+                                                        <span className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-sm shrink-0">🆕</span>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className={`${textCls} whitespace-normal`}>What's new in this update</div>
+                                                            <ul className="mt-1 space-y-1 text-[11px] text-slate-600 font-medium leading-snug">
+                                                                {APP_UPDATE.items.map((t, i) => <li key={i}>{t}</li>)}
+                                                            </ul>
+                                                        </div>
+                                                    </div>
+                                                );
                                                 return (
                                                     <div key={r.key} className={rowCls}>
                                                         <span className="w-8 h-8 rounded-full bg-violet-100 text-violet-700 flex items-center justify-center text-sm shrink-0">{r.ci.icon}</span>
@@ -9089,7 +9167,7 @@ Rules:
                                 </ul>
                                 {updateErr && <p className="text-xs font-semibold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{updateErr}</p>}
                                 <button type="button" onClick={acceptAppUpdate} disabled={updateBusy} className={`w-full py-3 rounded-xl text-white text-sm font-black shadow transition-colors active:scale-[0.99] ${updateBusy ? 'bg-indigo-400 cursor-wait' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
-                                    {updateBusy ? 'Updating…' : updateErr ? 'Try again' : (APP_UPDATE.resetLibrary ? 'Accept & update my library' : 'Got it')}
+                                    {updateBusy ? 'Updating…' : updateErr ? 'Try again' : (wantsLibReset() ? 'Accept & update my library' : 'Got it')}
                                 </button>
                             </div>
                         </div>
@@ -9596,17 +9674,6 @@ Rules:
                                         className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                                     />
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-700 mb-1">Target Word Count (Capacity Goal)</label>
-                                    <input
-                                        type="number"
-                                        min="10"
-                                        max="5000"
-                                        value={newPageTarget}
-                                        onChange={(e) => setNewPageTarget(e.target.value)}
-                                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                                    />
-                                </div>
                                 <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
                                     <button
                                         type="button"
@@ -9641,17 +9708,6 @@ Rules:
                                         value={editingPageObj.name}
                                         onChange={(e) => setEditingPageObj({ ...editingPageObj, name: e.target.value })}
                                         className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-700 mb-1">Target Word Count Goal</label>
-                                    <input
-                                        type="number"
-                                        min="10"
-                                        max="5000"
-                                        value={editingPageObj.targetCount}
-                                        onChange={(e) => setEditingPageObj({ ...editingPageObj, targetCount: e.target.value })}
-                                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                                     />
                                 </div>
                                 <div className="flex justify-between items-center pt-2 border-t border-slate-100">
@@ -10237,7 +10293,7 @@ Rules:
                                                 }`}
                                             >
                                                 <span>📖 {b.name}</span>
-                                                <span className="opacity-75 font-normal text-[10px] hidden sm:inline">({(allWords[b.id] || []).length}/{b.targetCount || 500})</span>
+                                                <span className="opacity-75 font-normal text-[10px] hidden sm:inline">({(allWords[b.id] || []).length})</span>
                                             </button>
                                         ))}
 
@@ -12043,6 +12099,19 @@ Rules:
                                 <p className="text-[11px] opacity-60">Tip: the Synonym / Antonym game and quiz questions need these switched on — you'll get a reminder if they're off.</p>
                             </div>
 
+                            {/* MULTIPLAYER VISIBILITY */}
+                            {cloudUser && mpListed !== null && (
+                                <div className={`rounded-2xl border shadow-sm p-4 space-y-3 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
+                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                        <div className="min-w-0">
+                                            <h2 className="text-lg font-extrabold flex items-center gap-2"><span>🌐</span> Multiplayer visibility</h2>
+                                            <p className="text-xs mt-0.5 opacity-80">{mpListed ? "You're visible in the players list — others can find and invite you." : "You're hidden. Show yourself to appear in the players list, earn leaderboard points and receive invites. Only your name and photo are shared."}</p>
+                                        </div>
+                                        <button type="button" onClick={() => setListedVisible(!mpListed)} className={`px-4 py-2 rounded-xl text-xs font-bold shrink-0 ${mpListed ? 'bg-slate-200 text-slate-800 hover:bg-slate-300' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}>{mpListed ? 'Hide me' : 'Show me'}</button>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* DISPLAY SETTINGS */}
                             <div className={`rounded-2xl border shadow-sm p-4 space-y-3 ${appTheme === 'light' ? 'bg-white border-slate-200' : appTheme === 'aurora' ? 'bg-white/10 border-white/20 text-slate-100' : 'bg-slate-900/70 border-slate-700 text-slate-100'}`}>
                                 <div>
@@ -12176,7 +12245,7 @@ Rules:
                                                 <div className="flex justify-between items-start">
                                                     <div>
                                                         <h4 className="font-bold text-slate-900 text-base">{b.name}</h4>
-                                                        <p className="text-xs text-slate-500 mt-0.5">{count} words ({b.targetCount ? `Goal: ${b.targetCount}` : 'Custom'})</p>
+                                                        <p className="text-xs text-slate-500 mt-0.5">{count} words</p>
                                                     </div>
                                                     <button
                                                         onClick={() => setEditingPageObj({ ...b })}
@@ -12260,17 +12329,6 @@ Rules:
                                         </div>
                                     </div>
 
-                                    <div className="w-px self-stretch bg-slate-200 hidden sm:block"></div>
-
-                                    <div className="flex flex-col gap-1.5">
-                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">AI Prompt</span>
-                                        <button
-                                            onClick={() => setShowGeminiPromptModal(true)}
-                                            className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all flex items-center gap-1.5"
-                                        >
-                                            <span>📋 Prompt Template</span>
-                                        </button>
-                                    </div>
                                 </div>
 
                                 <input
